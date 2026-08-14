@@ -1,0 +1,14 @@
+# dsh-skills-manager bundle patch
+#
+# This file is the `dsh.bundle.patch` layer of the package: when the plugin is
+# installed through the official CLI —
+#
+#   dsh plugin --profile <name> add dsh-skills-manager
+#
+# — the command reconciles `dsh.profile.bundles` against installed packages
+# and, seeing this declaration, appends `dsh-skills-manager` to the bundle
+# stack. The profile boot then merges THIS patch (a single `insert` of the
+# plugin row) exactly like a manual cordis.patch.yml mount line.
+- insert:
+    - id: skills-manager
+      name: 'dsh-skills-manager'

@@ -93,4 +93,6 @@ export const api = {
     call<{ ok: true }>('skills.delete', scopePayload(scope, { root, name })),
   rename: (scope: SkillsSessionScope, root: 'user' | 'project', name: string, newName: string) =>
     call<{ name: string; path: string }>('skills.rename', scopePayload(scope, { root, name, newName })),
+  move: (scope: SkillsSessionScope, root: 'user' | 'project', name: string, to: 'user' | 'project') =>
+    call<{ name: string; path: string }>('skills.move', scopePayload(scope, { root, name, to })),
 }

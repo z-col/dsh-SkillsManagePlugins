@@ -34,6 +34,7 @@ DeepSeek Harness (DSH) 的 Skill 是放在目录里的 Markdown 指令文件（`
 | 🗑️ 安全删除 | 删除前二次确认，防止误删 |
 | ✏️ 智能重命名 | 改名后**自动同步 frontmatter 的 `name` 字段**（DSH 以 frontmatter name 为准，只改文件夹名会让 Skill 失效） |
 | 🗂️ 双层级管理 | 用户级 `~/.dsh/skills/` 与项目级 `<项目根>/.dsh/skills/` 一键切换 |
+| ↔️ 跨级移动 | 卡片「操作」菜单一键把 Skill 在用户级 / 项目级之间移动（no-clobber） |
 | 🌍 中英文界面 | 跟随 DSH 的 locale 系统自动切换 |
 
 ## 📸 截图
@@ -85,7 +86,7 @@ npx -p @deepseek-ai/dsh dsh plugin --profile web add /path/to/SkillsManagePlugin
 │  · 全部文件操作限定在用户/项目 skill 根内（路径围栏）     │
 │  方法：roots.info / skills.list / skills.get /          │
 │        skills.create（no-clobber）/ skills.update（原子）│
-│        skills.delete / skills.rename（同步 frontmatter）│
+│        skills.delete / skills.rename / skills.move 跨级 │
 └─────────────────────────────────────────────────────────┘
 ┌─ Client 半（lib/client.js）────────────────────────────┐
 │  · ctx.inject(['betterSidebar']) → Skills 侧边栏 tab     │

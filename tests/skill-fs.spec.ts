@@ -13,6 +13,7 @@ import {
   createBundleSkill,
   deleteSkillEntry,
   flatSkillPath,
+  moveSkillEntry,
   readSkillFile,
   renameSkillEntry,
   scanSkillsRoot,
@@ -180,6 +181,63 @@ describe('renameSkillEntry', () => {
     const b = await createBundleSkill(root, { name: 'b', description: 'B' })
     await expect(renameSkillEntry({ ...b, description: b.description }, root, 'a')).rejects.toMatchObject({ code: 'conflict' })
     await rm(root, { recursive: true, force: true })
+  })
+})
+
+describe('moveSkillEntry', () => {
+  it('moves a bundle skill to another root and removes the source', async () => {
+    const userRoot = await scratch()
+    const projectRoot = await scratch()
+    const entry = await createBundleSkill(userRoot, { name: 'demo', description: 'Demo' })
+    // Assets inside the bundle directory travel with the skill.
+    await writeFile(join(entry.directory, 'extra.txt'), 'asset')
+    const moved = await moveSkillEntry(entry, projectRoot)
+    expect(moved.name).toBe('demo')
+    expect(moved.form).toBe('bundle')
+    expect(moved.path).toBe(join(projectRoot, 'demo', 'SKILL.md'))
+    // Source is gone; the destination holds the whole directory.
+    await expect(readFile(entry.path, 'utf8')).rejects.toThrow()
+    expect(await readFile(join(projectRoot, 'demo', 'extra.txt'), 'utf8')).toBe('asset')
+    expect((await readFile(moved.path, 'utf8')).includes('name: demo')).toBe(true)
+    await rm(userRoot, { recursive: true, force: true })
+    await rm(projectRoot, { recursive: true, force: true })
+  })
+
+  it('moves a flat skill', async () => {
+    const userRoot = await scratch()
+    const projectRoot = await scratch()
+    await writeFile(join(userRoot, 'demo.md'), skillText('demo', 'Demo'))
+    const entry = (await scanSkillsRoot(userRoot)).find(candidate => candidate.name === 'demo')
+    expect(entry?.form).toBe('flat')
+    const moved = await moveSkillEntry(entry!, projectRoot)
+    expect(moved.path).toBe(join(projectRoot, 'demo.md'))
+    await expect(readFile(join(userRoot, 'demo.md'), 'utf8')).rejects.toThrow()
+    expect(await readFile(moved.path, 'utf8')).toContain('description: Demo')
+    await rm(userRoot, { recursive: true, force: true })
+    await rm(projectRoot, { recursive: true, force: true })
+  })
+
+  it('refuses to move onto an existing name (no-clobber)', async () => {
+    const userRoot = await scratch()
+    const projectRoot = await scratch()
+    await createBundleSkill(userRoot, { name: 'demo', description: 'A' })
+    await createBundleSkill(projectRoot, { name: 'demo', description: 'B' })
+    const entry = (await scanSkillsRoot(userRoot))[0]!
+    await expect(moveSkillEntry(entry, projectRoot)).rejects.toMatchObject({ code: 'conflict' })
+    // The source skill survives untouched.
+    expect(await scanSkillsRoot(userRoot)).toHaveLength(1)
+    await rm(userRoot, { recursive: true, force: true })
+    await rm(projectRoot, { recursive: true, force: true })
+  })
+
+  it('creates a missing destination root on demand', async () => {
+    const userRoot = await scratch()
+    const projectRoot = join(userRoot, 'nested', 'proj', '.dsh', 'skills')
+    const entry = await createBundleSkill(userRoot, { name: 'demo', description: 'Demo' })
+    const moved = await moveSkillEntry(entry, projectRoot)
+    expect(moved.path).toBe(join(projectRoot, 'demo', 'SKILL.md'))
+    expect(await scanSkillsRoot(userRoot)).toHaveLength(0)
+    await rm(userRoot, { recursive: true, force: true })
   })
 })
 

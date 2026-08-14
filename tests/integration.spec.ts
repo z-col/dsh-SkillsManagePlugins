@@ -141,6 +141,41 @@ describe('real composition: host API over HTTP', () => {
     expect(response.status).toBe(404)
   })
 
+  it('moves a user skill to the project root and back over HTTP', async () => {
+    await post<{ name: string }>(port, 'skills.create', {
+      sessionId: 'session-1', root: 'user', name: 'movable', description: 'Movable skill', body: 'move me',
+    })
+
+    // User → project.
+    const moved = await post<{ name: string; path: string }>(port, 'skills.move', {
+      sessionId: 'session-1', root: 'user', name: 'movable', to: 'project',
+    })
+    expect(moved.name).toBe('movable')
+    expect(moved.path).toContain('.dsh')
+    const userList = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
+    expect(userList.some(entry => entry.name === 'movable')).toBe(false)
+    const projectList = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'project' })
+    expect(projectList.some(entry => entry.name === 'movable')).toBe(true)
+
+    // Project → user (the reverse direction).
+    await post<{ name: string }>(port, 'skills.move', {
+      sessionId: 'session-1', root: 'project', name: 'movable', to: 'user',
+    })
+    const userList2 = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
+    expect(userList2.some(entry => entry.name === 'movable')).toBe(true)
+    const projectList2 = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'project' })
+    expect(projectList2.some(entry => entry.name === 'movable')).toBe(false)
+  })
+
+  it('rejects moving within the same root', async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/skills/api/skills.move`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-1', root: 'user', name: 'whatever', to: 'user' }),
+    })
+    expect(response.status).toBe(400)
+  })
+
   it('fences cross-site requests', async () => {
     const response = await fetch(`http://127.0.0.1:${port}/skills/api/skills.list`, {
       method: 'POST',

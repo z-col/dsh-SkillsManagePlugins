@@ -21,6 +21,7 @@ import {
   deleteSkillEntry,
   findProjectRoot,
   flatSkillPath,
+  moveSkillEntry,
   projectSkillsRoot,
   readSkillFile,
   renameSkillEntry,
@@ -69,11 +70,11 @@ async function projectRoot(cwd: string): Promise<string> {
   return resolve(projectSkillsRoot(root))
 }
 
-/** Read `root` from a payload: 'user' | 'project' (required). */
-function requireRoot(payload: unknown): SkillRootKind {
-  const value = requireString(payload, 'root')
+/** Read `root`/`to` from a payload: 'user' | 'project' (required). */
+function requireRoot(payload: unknown, key = 'root'): SkillRootKind {
+  const value = requireString(payload, key)
   if (value !== 'user' && value !== 'project') {
-    throw new SkillsError('bad-request', 'root must be "user" or "project"')
+    throw new SkillsError('bad-request', `${key} must be "user" or "project"`)
   }
   return value
 }
@@ -202,6 +203,20 @@ function api(ctx: Context): Record<string, ApiMethod> {
       const next = await renameSkillEntry(entry, scope.root, newName)
       return { name: next.name, path: next.path }
     },
+
+    /** Move a skill to the other root (user ↔ project), no-clobber. */
+    async 'skills.move'(payload: unknown): Promise<unknown> {
+      const scope = await scopeOf(ctx, payload)
+      const name = requireString(payload, 'name')
+      const to = requireRoot(payload, 'to')
+      if (to === scope.kind) {
+        throw new SkillsError('bad-request', 'source and destination roots are the same')
+      }
+      const entry = await findEntry(scope, name)
+      const destRoot = to === 'user' ? userRoot() : await projectRoot(scope.cwd)
+      const moved = await moveSkillEntry(entry, destRoot)
+      return { name: moved.name, path: moved.path }
+    },
   }
 }
 
@@ -255,3 +270,4 @@ export { isTrustedApiRequest, isLoopbackHostname } from './trust-fence.ts'
 export type { SkillsErrorCode } from './wire.ts'
 export { SkillsError } from './wire.ts'
 export type { SkillEntry, SkillRootKind, SkillFileContent, SkillCreateInput } from './skill-fs.ts'
+export { moveSkillEntry } from './skill-fs.ts'

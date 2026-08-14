@@ -5,7 +5,7 @@
  * the CRUD primitives (create with no-clobber, atomic update, delete,
  * rename). All paths are validated to stay inside the owning root.
  */
-import { access, lstat, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises'
+import { access, copyFile, cp, lstat, mkdir, readFile, readdir, rename, rm } from 'node:fs/promises'
 import { dirname, join, resolve as resolvePath, sep } from 'node:path'
 import { parse as parseYaml } from 'yaml'
 import { resolveDshHome } from '@deepseek-ai/dsh-home-paths'
@@ -314,6 +314,62 @@ export async function renameSkillEntry(
   return entry.form === 'bundle'
     ? { name: newName, path: nextPath, directory: targetPath, form: 'bundle', description: entry.description }
     : { name: newName, path: nextPath, directory: root, form: 'flat', description: entry.description }
+}
+
+/**
+ * Move a skill entry to another root (user ↔ project) with no-clobber
+ * semantics: the target name must be free, and the copy happens BEFORE the
+ * source is deleted, so a failed copy never loses the skill. The destination
+ * root chain is created on demand (a fresh project root may not exist yet).
+ * The frontmatter `name` field is unchanged — the skill keeps its identity.
+ */
+export async function moveSkillEntry(entry: SkillEntry, destRoot: string): Promise<SkillEntry> {
+  const root = resolvePath(destRoot)
+  const targetPath = entry.form === 'bundle'
+    ? join(root, assertSkillName(entry.name))
+    : join(root, `${assertSkillName(entry.name)}.md`)
+  // Never move onto itself (e.g. user root and project root resolve to the
+  // same directory in an odd layout) — that would silently delete the skill.
+  if (resolvePath(targetPath) === resolvePath(entry.directory)) {
+    throw new SkillsError('bad-request', 'source and destination are the same location')
+  }
+  try {
+    await access(targetPath)
+    throw new SkillsError('conflict', `skill "${entry.name}" already exists in the destination root`, 409)
+  } catch (error) {
+    if (error instanceof SkillsError) throw error
+    // ENOENT: the destination name is free — proceed.
+  }
+  try {
+    await mkdir(root, { recursive: true })
+  } catch (error) {
+    throw new SkillsError('fs-error', `cannot create destination root "${root}": ${error instanceof Error ? error.message : String(error)}`)
+  }
+  // Copy first; only delete the source after the copy fully lands.
+  try {
+    if (entry.form === 'bundle') {
+      await cp(entry.directory, targetPath, { recursive: true })
+    } else {
+      await copyFile(entry.path, targetPath)
+    }
+  } catch (error) {
+    throw new SkillsError('fs-error', `cannot copy skill "${entry.name}" to "${root}": ${error instanceof Error ? error.message : String(error)}`)
+  }
+  try {
+    await rm(entry.form === 'bundle' ? entry.directory : entry.path, { recursive: true, force: false })
+  } catch (error) {
+    // The copy landed but the source cleanup failed: keep the duplicate and
+    // report the partial state instead of pretending the move succeeded.
+    throw new SkillsError('fs-error', `moved "${entry.name}" to "${root}" but could not remove the source: ${error instanceof Error ? error.message : String(error)}`)
+  }
+  return {
+    name: entry.name,
+    path: entry.form === 'bundle' ? join(targetPath, 'SKILL.md') : targetPath,
+    directory: entry.form === 'bundle' ? targetPath : root,
+    form: entry.form,
+    description: entry.description,
+    ...(entry.whenToUse !== undefined ? { whenToUse: entry.whenToUse } : {}),
+  }
 }
 
 /** Replace the `name:` line inside the leading frontmatter block. */

@@ -9,11 +9,29 @@
   background: var(--dsw-alias-bg-layer-2, #fff);
 }
 
-.tabs {
+/* One toolbar row: the root tabs (user/project) on the left, the context
+   action (back / + new skill) on the right. */
+.toolbar {
   flex: none;
   display: flex;
-  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
   padding: 8px 14px 0;
+}
+
+.tabs {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+}
+
+.actions {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .tab {
@@ -31,14 +49,6 @@
   background: var(--dsw-alias-button-primary-fill, #1664ff);
   border-color: var(--dsw-alias-button-primary-fill, #1664ff);
   color: var(--dsw-alias-label-primary-inverted, #fff);
-}
-
-.actionsRow {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 14px;
 }
 
 .primaryButton {
@@ -119,15 +129,17 @@
   gap: 8px;
 }
 
+/* One skill card: the openable main area (name + description) plus the
+   「操作」 button; the card is positioned so the action menu anchors to it. */
 .skillCard {
+  position: relative;
   display: flex;
-  align-items: center;
-  gap: 10px;
+  align-items: flex-start;
+  gap: 8px;
   padding: 10px 12px;
   border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
   border-radius: 10px;
   background: var(--dsw-alias-bg-layer-2, #fff);
-  cursor: pointer;
   text-align: left;
 }
 
@@ -135,13 +147,32 @@
   background: var(--dsw-alias-interactive-bg-hover-accent, rgba(22, 100, 255, 0.06));
 }
 
+/* The card body: clicking it opens the skill (name on line 1, description on
+   line 2). */
+.skillCardMain {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
 .skillName {
   font-size: 13px;
   line-height: 20px;
   font-weight: 600;
   color: var(--dsw-alias-label-primary, #1a1a1a);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
+/* Second row: the description on its own line. */
 .skillDesc {
   font-size: 12px;
   line-height: 18px;
@@ -151,14 +182,112 @@
   white-space: nowrap;
 }
 
-.skillBadge {
+/* The 「操作」 button that opens the per-card action menu. */
+.opsButton {
   flex: none;
-  padding: 2px 8px;
+  padding: 2px 10px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
   border-radius: 999px;
+  background: var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.06));
+  color: var(--dsw-alias-label-secondary, #555);
   font-size: 11px;
   line-height: 16px;
-  color: var(--dsw-alias-label-tertiary, #888);
-  background: var(--dsw-alias-interactive-bg-active, rgba(0, 0, 0, 0.06));
+  cursor: pointer;
+}
+
+.opsButton:hover,
+.opsButtonActive {
+  background: var(--dsw-alias-button-primary-fill, #1664ff);
+  border-color: var(--dsw-alias-button-primary-fill, #1664ff);
+  color: var(--dsw-alias-label-primary-inverted, #fff);
+}
+
+/* The dropdown menu under the ops button. */
+.cardMenu {
+  position: absolute;
+  top: calc(100% - 4px);
+  right: 8px;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 140px;
+  padding: 4px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
+  border-radius: 10px;
+  background: var(--dsw-alias-bg-layer-2, #fff);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.14);
+}
+
+.menuItem {
+  padding: 7px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  text-align: left;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary, #1a1a1a);
+  cursor: pointer;
+}
+
+.menuItem:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+.menuItem:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+.menuDanger {
+  color: var(--dsw-alias-state-error-primary, #d93838);
+}
+
+.menuLabel {
+  padding: 2px 4px 0;
+  font-size: 11px;
+  line-height: 16px;
+  font-weight: 600;
+  color: var(--dsw-alias-label-secondary, #555);
+}
+
+.menuInput {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
+  border-radius: 6px;
+  background: var(--dsw-alias-bg-layer-2, #fff);
+  color: var(--dsw-alias-label-primary, #1a1a1a);
+  font-size: 12px;
+  line-height: 18px;
+  outline: none;
+}
+
+.menuInput:focus {
+  border-color: var(--dsw-alias-brand-primary, #1664ff);
+}
+
+.menuActions {
+  display: flex;
+  gap: 6px;
+  padding: 2px 4px 4px;
+}
+
+.menuText {
+  padding: 2px 4px;
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-primary, #1a1a1a);
+}
+
+.menuError {
+  padding: 4px 4px 2px;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--dsw-alias-state-error-primary, #d93838);
+  word-break: break-all;
 }
 
 .detail {

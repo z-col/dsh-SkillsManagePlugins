@@ -32,19 +32,29 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
   const state = store.getSnapshot()
   const [, force] = useState(0)
   useEffect(() => store.subscribe(() => force(v => v + 1)), [store])
-  const [entries, setEntries] = useState<SkillsEntry[] | null>(null)
+
+  // The sidebar shell rebuilds the `scope` prop object on every shell
+  // re-render (session feed / store / locale changes). Depending on the
+  // OBJECT would re-fire api.list and flash the loading state on every such
+  // re-render — the visible "flicker". Depend on the primitive fields so an
+  // equal scope (same session id + cwd) is a no-op.
+  const sessionId = scope.sessionId
+  const cwd = scope.cwd
+
+  /** The entries currently shown, tagged with the root they came from. */
+  const [loaded, setLoaded] = useState<{ root: 'user' | 'project'; entries: SkillsEntry[] } | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const requestSeq = useRef(0)
 
-  const load = useCallback(async (root: 'user' | 'project', scope0: SkillsScope) => {
+  const load = useCallback(async (root: 'user' | 'project', sessionId0: string, cwd0: string | undefined) => {
     const seq = ++requestSeq.current
     setLoading(true)
     setError(null)
     try {
-      const next = await api.list(scope0, root)
+      const next = await api.list({ sessionId: sessionId0, cwd: cwd0 }, root)
       if (seq !== requestSeq.current) return
-      setEntries(next)
+      setLoaded({ root, entries: next })
       setLoading(false)
     } catch (cause) {
       if (seq !== requestSeq.current) return
@@ -54,94 +64,270 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
   }, [])
 
   useEffect(() => {
-    void load(state.root, scope)
-  }, [state.root, scope, load])
+    void load(state.root, sessionId, cwd)
+  }, [state.root, sessionId, cwd, load])
 
   return (
     <>
-      <div className={css.tabs}>
-        <button
-          type="button"
-          className={`${css.tab} ${state.root === 'user' ? css.tabActive : ''}`}
-          onClick={() => store.actions.switchRoot('user')}
-        >
-          {t('userTab')}
-        </button>
-        <button
-          type="button"
-          className={`${css.tab} ${state.root === 'project' ? css.tabActive : ''}`}
-          onClick={() => store.actions.switchRoot('project')}
-        >
-          {t('projectTab')}
-        </button>
-      </div>
-      <div className={css.actionsRow}>
-        {state.view !== 'list' ? (
+      <div className={css.toolbar}>
+        <div className={css.tabs}>
           <button
             type="button"
-            className={css.ghostButton}
-            onClick={() => store.actions.showList()}
+            className={`${css.tab} ${state.root === 'user' ? css.tabActive : ''}`}
+            onClick={() => store.actions.switchRoot('user')}
           >
-            ← {t('back')}
+            {t('userTab')}
           </button>
-        ) : (
-          <span />
-        )}
-        {state.view === 'list' && (
           <button
             type="button"
-            className={css.primaryButton}
-            onClick={() => store.actions.showCreate()}
+            className={`${css.tab} ${state.root === 'project' ? css.tabActive : ''}`}
+            onClick={() => store.actions.switchRoot('project')}
           >
-            + {t('newSkill')}
+            {t('projectTab')}
           </button>
-        )}
+        </div>
+        <div className={css.actions}>
+          {state.view !== 'list' ? (
+            <button
+              type="button"
+              className={css.ghostButton}
+              onClick={() => store.actions.showList()}
+            >
+              ← {t('back')}
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={css.primaryButton}
+              onClick={() => store.actions.showCreate()}
+            >
+              + {t('newSkill')}
+            </button>
+          )}
+        </div>
       </div>
       {error !== null && <div className={css.error}>{error}</div>}
       <div className={css.body}>
         {state.view === 'list' && (
           <ListView
-            entries={entries}
+            entries={loaded !== null && loaded.root === state.root ? loaded.entries : null}
             loading={loading}
             emptyLabel={state.root === 'user' ? t('emptyUser') : t('emptyProject')}
+            root={state.root}
+            scope={scope}
             onOpen={(name) => store.actions.showDetail(name)}
+            onChanged={() => { void load(state.root, sessionId, cwd) }}
           />
         )}
         {state.view === 'detail' && (
-          <DetailView store={store} root={state.root} name={state.selectedName} scope={scope} onChanged={() => { void load(state.root, scope) }} />
+          <DetailView store={store} root={state.root} name={state.selectedName} scope={scope} onChanged={() => { void load(state.root, sessionId, cwd) }} />
         )}
         {state.view === 'create' && (
-          <CreateView store={store} root={state.root} scope={scope} onCreated={() => { void load(state.root, scope) }} />
+          <CreateView store={store} root={state.root} scope={scope} onCreated={() => { void load(state.root, sessionId, cwd) }} />
         )}
       </div>
     </>
   )
 }
 
-/** The list view: skill cards. */
+/** One open card menu: which skill, and which step is showing. */
+type CardMenu =
+  | { name: string; mode: 'actions' }
+  | { name: string; mode: 'rename' }
+  | { name: string; mode: 'confirm-delete' }
+  | null
+
+/**
+ * The list view: skill cards with a per-card 「操作」 menu (rename / delete /
+ * move to the other level). `entries` is null only while the CURRENT root has
+ * never loaded; a refresh keeps the previous entries on screen (no full-panel
+ * flash), the loading state is only visible on first load.
+ */
 function ListView(props: {
   entries: SkillsEntry[] | null
   loading: boolean
   emptyLabel: string
+  root: 'user' | 'project'
+  scope: SkillsScope
   onOpen: (name: string) => void
+  onChanged: () => void
 }) {
-  const { entries, loading, emptyLabel, onOpen } = props
-  if (loading) return <p className={css.status}>{t('loading')}</p>
-  if (entries === null) return <p className={css.status}>{t('loadFailed')}</p>
+  const { entries, loading, emptyLabel, root, scope, onOpen, onChanged } = props
+  const [menu, setMenu] = useState<CardMenu>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [busyName, setBusyName] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const closeMenu = (): void => {
+    setMenu(null)
+    setRenameValue('')
+    setError(null)
+    setBusyName(null)
+  }
+
+  // Close the open menu on outside click or Escape; clicks inside the card
+  // (including the ops button that toggles it) are left to their handlers.
+  useEffect(() => {
+    if (menu === null) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const el = event.target as Element | null
+      if (el !== null && el.closest('[data-skill-card]')) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeMenu()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menu])
+
+  const toggleMenu = (name: string): void => {
+    if (menu?.name === name && menu.mode === 'actions') {
+      closeMenu()
+      return
+    }
+    setRenameValue('')
+    setError(null)
+    setMenu({ name, mode: 'actions' })
+  }
+
+  const startRename = (name: string): void => {
+    setRenameValue(name)
+    setError(null)
+    setMenu({ name, mode: 'rename' })
+  }
+
+  const doRename = async (): Promise<void> => {
+    if (menu === null || menu.mode !== 'rename') return
+    const name = menu.name
+    const next = renameValue.trim()
+    if (next === '' || next === name) {
+      closeMenu()
+      return
+    }
+    setBusyName(name)
+    setError(null)
+    try {
+      await api.rename(scope, root, name, next)
+      closeMenu()
+      onChanged()
+    } catch (cause) {
+      setError(messageOf(cause))
+      setBusyName(null)
+    }
+  }
+
+  const doDelete = async (): Promise<void> => {
+    if (menu === null || menu.mode !== 'confirm-delete') return
+    const name = menu.name
+    setBusyName(name)
+    setError(null)
+    try {
+      await api.delete(scope, root, name)
+      closeMenu()
+      onChanged()
+    } catch (cause) {
+      setError(messageOf(cause))
+      setBusyName(null)
+    }
+  }
+
+  const doMove = async (): Promise<void> => {
+    if (menu === null) return
+    const name = menu.name
+    setBusyName(name)
+    setError(null)
+    try {
+      await api.move(scope, root, name, root === 'user' ? 'project' : 'user')
+      closeMenu()
+      onChanged()
+    } catch (cause) {
+      setError(messageOf(cause))
+      setBusyName(null)
+    }
+  }
+
+  const moveLabel = root === 'user' ? t('moveToProject') : t('moveToUser')
+
+  if (entries === null) {
+    return loading ? <p className={css.status}>{t('loading')}</p> : <p className={css.status}>{t('loadFailed')}</p>
+  }
   if (entries.length === 0) return <p className={css.status}>{emptyLabel}</p>
   return (
     <div className={css.skillList}>
       {entries.map(entry => (
-        <button
-          key={entry.name}
-          type="button"
-          className={css.skillCard}
-          onClick={() => onOpen(entry.name)}
-        >
-          <span className={css.skillName}>{entry.name}</span>
-          <span className={css.skillDesc}>{entry.description}</span>
-          <span className={css.skillBadge}>{entry.form === 'bundle' ? 'dir' : '.md'}</span>
-        </button>
+        <div key={entry.name} className={css.skillCard} data-skill-card>
+          <button
+            type="button"
+            className={css.skillCardMain}
+            onClick={() => { closeMenu(); onOpen(entry.name) }}
+          >
+            <span className={css.skillName}>{entry.name}</span>
+            <span className={css.skillDesc}>{entry.description}</span>
+          </button>
+          <button
+            type="button"
+            className={`${css.opsButton} ${menu?.name === entry.name ? css.opsButtonActive : ''}`}
+            aria-label={t('ops')}
+            onClick={(event) => { event.stopPropagation(); toggleMenu(entry.name) }}
+          >
+            {t('ops')}
+          </button>
+          {menu?.name === entry.name && (
+            <div className={css.cardMenu} onClick={(event) => event.stopPropagation()}>
+              {menu.mode === 'rename' ? (
+                <>
+                  <label className={css.menuLabel}>{t('renameTo')}</label>
+                  <input
+                    className={css.menuInput}
+                    value={renameValue}
+                    onChange={(e) => setRenameValue(e.target.value)}
+                    placeholder={t('namePlaceholder')}
+                    disabled={busyName !== null}
+                    autoFocus
+                  />
+                  <div className={css.menuActions}>
+                    <button type="button" className={css.primaryButton} disabled={busyName !== null} onClick={() => { void doRename() }}>
+                      {busyName !== null ? '…' : t('confirm')}
+                    </button>
+                    <button type="button" className={css.ghostButton} disabled={busyName !== null} onClick={closeMenu}>
+                      {t('cancel')}
+                    </button>
+                  </div>
+                </>
+              ) : menu.mode === 'confirm-delete' ? (
+                <>
+                  <p className={css.menuText}>{t('deleteConfirm')}</p>
+                  <div className={css.menuActions}>
+                    <button type="button" className={`${css.ghostButton} ${css.dangerButton}`} disabled={busyName !== null} onClick={() => { void doDelete() }}>
+                      {busyName !== null ? '…' : t('delete')}
+                    </button>
+                    <button type="button" className={css.ghostButton} disabled={busyName !== null} onClick={closeMenu}>
+                      {t('cancel')}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => startRename(entry.name)}>
+                    {t('rename')}
+                  </button>
+                  <button type="button" className={`${css.menuItem} ${css.menuDanger}`} disabled={busyName !== null} onClick={() => setMenu({ name: entry.name, mode: 'confirm-delete' })}>
+                    {t('delete')}
+                  </button>
+                  <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => { void doMove() }}>
+                    {busyName !== null ? '…' : moveLabel}
+                  </button>
+                </>
+              )}
+              {error !== null && <p className={css.menuError}>{error}</p>}
+            </div>
+          )}
+        </div>
       ))}
     </div>
   )
@@ -167,11 +353,16 @@ function DetailView(props: {
   const [renamingBusy, setRenamingBusy] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
 
+  // Same flicker guard as the body: depend on the scope's primitive fields,
+  // not the object the sidebar shell rebuilds on every re-render.
+  const sessionId = scope.sessionId
+  const cwd = scope.cwd
+
   useEffect(() => {
     let alive = true
     setLoading(true)
     setError(null)
-    void api.get(scope, root, name)
+    void api.get({ sessionId, cwd }, root, name)
       .then((next) => {
         if (!alive) return
         setFile(next)
@@ -184,7 +375,7 @@ function DetailView(props: {
         setLoading(false)
       })
     return () => { alive = false }
-  }, [scope, root, name])
+  }, [sessionId, cwd, root, name])
 
   if (loading) return <p className={css.status}>{t('loading')}</p>
   if (error !== null || file === null) {

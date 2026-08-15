@@ -35,6 +35,7 @@ DeepSeek Harness (DSH) 的 Skill 是放在目录里的 Markdown 指令文件（`
 | ✏️ 智能重命名 | 改名后**自动同步 frontmatter 的 `name` 字段**（DSH 以 frontmatter name 为准，只改文件夹名会让 Skill 失效） |
 | 🗂️ 双层级管理 | 用户级 `~/.dsh/skills/` 与项目级 `<项目根>/.dsh/skills/` 一键切换 |
 | ↔️ 跨级移动 | 卡片「操作」菜单一键把 Skill 在用户级 / 项目级之间移动（no-clobber） |
+| 🧩 自动适配 | 装了 dsh-better-sidebar 自动集成到侧边栏；没装则在会话头部提供独立按钮 + 浮层面板；后装侧边栏也能自动切换 |
 | 🌍 中英文界面 | 跟随 DSH 的 locale 系统自动切换 |
 
 ## 📸 截图
@@ -47,7 +48,7 @@ DeepSeek Harness (DSH) 的 Skill 是放在目录里的 Markdown 指令文件（`
 
 ## 🚀 安装
 
-> 前置依赖：DSH Web（`@deepseek-ai/dsh` ≥ 0.1.0-rc.6）以及 [dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar)（提供侧边栏容器）。
+> 前置依赖：DSH Web（`@deepseek-ai/dsh` ≥ 0.1.0-rc.6）。[dsh-better-sidebar](https://github.com/omdsh-dev/DSH-better-sidebar) **可选**：装了 → 集成到侧边栏 + 菜单；没装 → 自动改用会话头部按钮 + 浮层面板；先装本插件再装侧边栏也会自动切换。
 
 ```sh
 # 从 npm 安装

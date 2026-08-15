@@ -85,3 +85,53 @@ export function createSkillsPanelStore(): SkillsPanelStore {
     actions,
   }
 }
+
+/**
+ * The standalone overlay store: whether the floating skills panel (used only
+ * while dsh-better-sidebar is absent) is open. One instance per activation;
+ * the header utility button and the overlay panel share it.
+ */
+export interface SkillsStandaloneState {
+  open: boolean
+}
+
+/** The standalone store's write actions. */
+export interface SkillsStandaloneActions {
+  toggle(): void
+  close(): void
+}
+
+/** The standalone store product. */
+export interface SkillsStandaloneStore {
+  getSnapshot(): SkillsStandaloneState
+  subscribe(fn: () => void): () => void
+  actions: SkillsStandaloneActions
+}
+
+/** Factory: one standalone store instance per plugin activation. */
+export function createSkillsStandaloneStore(): SkillsStandaloneStore {
+  let state: SkillsStandaloneState = { open: false }
+  const listeners = new Set<() => void>()
+  const emit = (): void => {
+    for (const listener of listeners) listener()
+  }
+  const set = (patch: Partial<SkillsStandaloneState>): void => {
+    state = { ...state, ...patch }
+    emit()
+  }
+  return {
+    getSnapshot: () => state,
+    subscribe(fn) {
+      listeners.add(fn)
+      return () => { listeners.delete(fn) }
+    },
+    actions: {
+      toggle() {
+        set({ open: !state.open })
+      },
+      close() {
+        set({ open: false })
+      },
+    },
+  }
+}

@@ -171,6 +171,18 @@ declare module 'cordis' {
       deps: string[] | Record<string, unknown>,
       callback: (ctx: Context) => void | (() => void),
     ): unknown
+    /**
+     * Read a service value without the inject requirement (core cordis):
+     * returns `undefined` while the service is not (yet) provided.
+     */
+    get<T = unknown>(name: string): T | undefined
+    /**
+     * Register an event listener (core cordis); returns the disposer.
+     * Service provide/unload surfaces through the `internal/service` event
+     * with `(name, value)` — `value` is the service when provided, undefined
+     * when unloaded.
+     */
+    on(event: string, listener: (...args: unknown[]) => void): () => void
   }
 }
 

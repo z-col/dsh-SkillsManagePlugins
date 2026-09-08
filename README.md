@@ -46,6 +46,8 @@ DeepSeek Harness (DSH) 的 Skill 是放在目录里的 Markdown 指令文件（`
 -->
 
 *（截图待补充 —— 欢迎贡献！）*
+<img width="790" height="698" alt="image" src="https://github.com/user-attachments/assets/a63d289b-c00d-4151-b582-d53c5fd8c795" />
+
 
 ## 🚀 安装
 

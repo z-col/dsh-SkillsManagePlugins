@@ -6,7 +6,7 @@
  * not a hand-rolled ctx.plugin() call.
  */
 import { describe, expect, it, beforeAll, afterAll } from 'vitest'
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises'
+import { mkdtemp, mkdir, rm, writeFile, access } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -30,18 +30,29 @@ async function post<T>(port: number, method: string, payload: Record<string, unk
 
 interface Entry { name: string; form: string; description: string; path: string }
 
+/** The wire shape of `skills.library.list`. */
+interface LibraryView {
+  skills: Array<{ name: string; form: string; description: string; assignments: Array<'user' | `project:${string}`> }>
+  projects: Array<{ root: string; label: string }>
+  currentProject: string
+}
+
 describe('real composition: host API over HTTP', () => {
   let port: number
   let app: Context
   let pluginFiber: { dispose(): Promise<void> }
   let scratch: string
   let originalHome: string | undefined
+  let originalNoOpen: string | undefined
 
   beforeAll(async () => {
     scratch = await mkdtemp(join(tmpdir(), 'dsh-skills-integration-'))
     // Point the DSH home at the scratch dir so user-level skills land there.
     originalHome = process.env.DSH_HOME
     process.env.DSH_HOME = scratch
+    // Never spawn a real file manager during tests.
+    originalNoOpen = process.env.DSH_SKILLS_NO_OPEN
+    process.env.DSH_SKILLS_NO_OPEN = '1'
 
     app = new Context()
     // Stub the two services the plugin injects that this composition lacks.
@@ -70,6 +81,8 @@ describe('real composition: host API over HTTP', () => {
     await rm(scratch, { recursive: true, force: true })
     if (originalHome === undefined) delete process.env.DSH_HOME
     else process.env.DSH_HOME = originalHome
+    if (originalNoOpen === undefined) delete process.env.DSH_SKILLS_NO_OPEN
+    else process.env.DSH_SKILLS_NO_OPEN = originalNoOpen
   })
 
   it('reports the user root under the scratch home', async () => {
@@ -83,53 +96,59 @@ describe('real composition: host API over HTTP', () => {
     expect(entries).toEqual([])
   })
 
-  it('creates, reads, updates, renames, deletes a user skill', async () => {
-    // Create
+  it('creates, reads, updates, renames, deletes a library skill over HTTP', async () => {
+    // Create: the canonical lands in the library (no assignment yet).
     const created = await post<{ name: string; path: string }>(port, 'skills.create', {
-      sessionId: 'session-1', root: 'user', name: 'demo-skill', description: 'Demo skill', body: 'do things',
+      sessionId: 'session-1', name: 'demo-skill', description: 'Demo skill', body: 'do things',
     })
     expect(created.name).toBe('demo-skill')
-    expect(created.path).toContain('demo-skill')
+    expect(created.path).toContain('skill-library')
 
-    // List
-    const list = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
-    expect(list).toHaveLength(1)
-    expect(list[0]?.name).toBe('demo-skill')
-    expect(list[0]?.form).toBe('bundle')
+    // The library lists it as unassigned.
+    const library = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    expect(library.skills.find(s => s.name === 'demo-skill')?.assignments).toEqual([])
 
-    // Read
+    // Assign to the user level → a user copy appears.
+    await post<{ name: string }>(port, 'skills.library.assign', {
+      sessionId: 'session-1', name: 'demo-skill', to: 'user',
+    })
+    const library2 = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    expect(library2.skills.find(s => s.name === 'demo-skill')?.assignments).toEqual(['user'])
+
+    // Read the user copy.
     const file = await post<{ name: string; description: string; body: string; raw: string }>(port, 'skills.get', {
       sessionId: 'session-1', root: 'user', name: 'demo-skill',
     })
     expect(file.description).toBe('Demo skill')
     expect(file.body).toBe('do things')
 
-    // Update (rewrite raw with new body)
+    // Update the user copy → the library canonical is refreshed too.
     const updatedRaw = file.raw.replace('do things', 'do better things')
     await post<{ ok: true }>(port, 'skills.update', {
       sessionId: 'session-1', root: 'user', name: 'demo-skill', content: updatedRaw,
     })
-    const afterUpdate = await post<{ body: string }>(port, 'skills.get', {
-      sessionId: 'session-1', root: 'user', name: 'demo-skill',
+    const canonical = await post<{ body: string }>(port, 'skills.get', {
+      sessionId: 'session-1', root: 'library', name: 'demo-skill',
     })
-    expect(afterUpdate.body).toBe('do better things')
+    expect(canonical.body).toBe('do better things')
 
-    // Rename
-    const renamed = await post<{ name: string }>(port, 'skills.rename', {
-      sessionId: 'session-1', root: 'user', name: 'demo-skill', newName: 'renamed-skill',
+    // Rename everywhere (canonical + the user copy).
+    await post<{ name: string }>(port, 'skills.rename', {
+      sessionId: 'session-1', name: 'demo-skill', newName: 'renamed-skill',
     })
-    expect(renamed.name).toBe('renamed-skill')
-    const afterRename = await post<{ name: string }>(port, 'skills.get', {
+    const library3 = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    expect(library3.skills.some(s => s.name === 'renamed-skill')).toBe(true)
+    const renamedUser = await post<{ name: string }>(port, 'skills.get', {
       sessionId: 'session-1', root: 'user', name: 'renamed-skill',
     })
-    expect(afterRename.name).toBe('renamed-skill')
+    expect(renamedUser.name).toBe('renamed-skill')
 
-    // Delete
-    await post<{ ok: true }>(port, 'skills.delete', {
-      sessionId: 'session-1', root: 'user', name: 'renamed-skill',
-    })
-    const afterDelete = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
-    expect(afterDelete).toEqual([])
+    // Delete everywhere: canonical + user copy are gone.
+    await post<{ ok: true }>(port, 'skills.delete', { sessionId: 'session-1', name: 'renamed-skill' })
+    const library4 = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    expect(library4.skills.some(s => s.name === 'renamed-skill')).toBe(false)
+    const userList = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
+    expect(userList.some(entry => entry.name === 'renamed-skill')).toBe(false)
   })
 
   it('rejects an unknown method with 404', async () => {
@@ -141,37 +160,84 @@ describe('real composition: host API over HTTP', () => {
     expect(response.status).toBe(404)
   })
 
-  it('moves a user skill to the project root and back over HTTP', async () => {
+  it('assigns a skill to the project level and recycles it back (multi-assignment)', async () => {
     await post<{ name: string }>(port, 'skills.create', {
-      sessionId: 'session-1', root: 'user', name: 'movable', description: 'Movable skill', body: 'move me',
+      sessionId: 'session-1', name: 'movable', description: 'Movable skill', body: 'move me', assignTo: ['user'],
     })
 
-    // User → project.
-    const moved = await post<{ name: string; path: string }>(port, 'skills.move', {
-      sessionId: 'session-1', root: 'user', name: 'movable', to: 'project',
+    // The session cwd IS the project root here (scratch has no .git marker).
+    const library = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    expect(library.currentProject).toBe(scratch)
+    expect(library.skills.find(s => s.name === 'movable')?.assignments).toEqual(['user'])
+
+    // Assign to the current project as well → both assignments coexist.
+    await post<{ name: string }>(port, 'skills.library.assign', {
+      sessionId: 'session-1', name: 'movable', to: { project: library.currentProject },
     })
-    expect(moved.name).toBe('movable')
-    expect(moved.path).toContain('.dsh')
-    const userList = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
-    expect(userList.some(entry => entry.name === 'movable')).toBe(false)
+    const library2 = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    const entry2 = library2.skills.find(s => s.name === 'movable')
+    expect(entry2?.assignments).toContain('user')
+    expect(entry2?.assignments).toContain(`project:${scratch}`)
+
+    // Recycle from the project: the user copy and the canonical survive.
+    await post<{ ok: true }>(port, 'skills.library.recycle', {
+      sessionId: 'session-1', name: 'movable', from: { project: scratch },
+    })
+    const library3 = await post<LibraryView>(port, 'skills.library.list', { sessionId: 'session-1' })
+    expect(library3.skills.find(s => s.name === 'movable')?.assignments).toEqual(['user'])
     const projectList = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'project' })
-    expect(projectList.some(entry => entry.name === 'movable')).toBe(true)
+    expect(projectList.some(entry => entry.name === 'movable')).toBe(false)
 
-    // Project → user (the reverse direction).
-    await post<{ name: string }>(port, 'skills.move', {
-      sessionId: 'session-1', root: 'project', name: 'movable', to: 'user',
-    })
-    const userList2 = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'user' })
-    expect(userList2.some(entry => entry.name === 'movable')).toBe(true)
-    const projectList2 = await post<Entry[]>(port, 'skills.list', { sessionId: 'session-1', root: 'project' })
-    expect(projectList2.some(entry => entry.name === 'movable')).toBe(false)
+    // Cleanup: recycle the user copy too, then delete the canonical.
+    await post<{ ok: true }>(port, 'skills.recycle', { sessionId: 'session-1', root: 'user', name: 'movable' })
+    await post<{ ok: true }>(port, 'skills.delete', { sessionId: 'session-1', name: 'movable' })
   })
 
-  it('rejects moving within the same root', async () => {
-    const response = await fetch(`http://127.0.0.1:${port}/skills/api/skills.move`, {
+  it('rejects recycling from the library root (level operation only)', async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/skills/api/skills.recycle`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: 'session-1', root: 'user', name: 'whatever', to: 'user' }),
+      body: JSON.stringify({ sessionId: 'session-1', root: 'library', name: 'whatever' }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('rejects assigning to an unindexed project root', async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/skills/api/skills.library.assign`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-1', name: 'whatever', to: { project: '/unindexed/project' } }),
+    })
+    expect(response.status).toBe(400)
+  })
+
+  it('resolves and prepares the selected folder without opening it (no-open guard)', async () => {
+    // DSH_SKILLS_NO_OPEN=1 (set in beforeAll) skips the real file-manager
+    // spawn; the method must still resolve each level's path and ensure the
+    // directory exists.
+    const library = await post<{ ok: true; path: string }>(port, 'skills.openFolder', {
+      sessionId: 'session-1', root: 'library',
+    })
+    expect(library.path).toBe(join(scratch, 'skill-library'))
+    await access(join(scratch, 'skill-library'))
+
+    const user = await post<{ ok: true; path: string }>(port, 'skills.openFolder', {
+      sessionId: 'session-1', root: 'user',
+    })
+    expect(user.path).toBe(join(scratch, 'skills'))
+
+    const project = await post<{ ok: true; path: string }>(port, 'skills.openFolder', {
+      sessionId: 'session-1', root: 'project',
+    })
+    expect(project.path).toBe(join(scratch, '.dsh', 'skills'))
+    await access(join(scratch, '.dsh', 'skills'))
+  })
+
+  it('rejects an invalid open-folder root kind', async () => {
+    const response = await fetch(`http://127.0.0.1:${port}/skills/api/skills.openFolder`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ sessionId: 'session-1', root: '/etc' }),
     })
     expect(response.status).toBe(400)
   })

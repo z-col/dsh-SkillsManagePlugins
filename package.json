@@ -1,7 +1,7 @@
 {
   "name": "dsh-skills-manager",
   "version": "0.1.0",
-  "description": "DSH web plugin: visualize and manage your skills — user-level (~/.dsh/skills) and project-level (<root>/.dsh/skills) — with a full CRUD panel.",
+  "description": "DSH web plugin: visualize and manage your skills — a canonical Skill library (~/.dsh/skill-library) plus user-level (~/.dsh/skills) and project-level (<root>/.dsh/skills) assignment copies, with full CRUD and multi-project assignment.",
   "type": "module",
   "license": "MIT",
   "repository": {

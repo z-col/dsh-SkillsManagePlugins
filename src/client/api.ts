@@ -37,6 +37,36 @@ export interface SkillsRootsInfo {
   cwd: string
 }
 
+/** A root the get/update methods accept (levels + the library canonical). */
+export type SkillsLevelRoot = 'user' | 'project' | 'library'
+
+/** An assignment target: the user level or an indexed project root. */
+export type SkillsAssignTarget = 'user' | { project: string }
+
+/** One library skill: canonical metadata plus its assignment badges. */
+export interface SkillsLibraryEntry {
+  name: string
+  form: 'bundle' | 'flat'
+  description: string
+  whenToUse?: string
+  /** 'user' and/or 'project:<root>' — every location holding a copy. */
+  assignments: Array<'user' | `project:${string}`>
+}
+
+/** One indexed project the library knows about. */
+export interface SkillsProjectRef {
+  root: string
+  label: string
+}
+
+/** The library list payload. */
+export interface SkillsLibraryData {
+  skills: SkillsLibraryEntry[]
+  projects: SkillsProjectRef[]
+  /** The current session's project root (for the 「当前项目」 quick target). */
+  currentProject: string
+}
+
 /** One request's session scope: the conversation id plus its cwd when known. */
 export interface SkillsSessionScope {
   sessionId: string
@@ -76,23 +106,41 @@ async function call<T>(method: string, payload: Record<string, unknown>, signal?
 export const api = {
   rootsInfo: (scope: SkillsSessionScope, signal?: AbortSignal) =>
     call<SkillsRootsInfo>('roots.info', scopePayload(scope, {}), signal),
+
+  /** List one level root (user or project). */
   list: (scope: SkillsSessionScope, root: 'user' | 'project', signal?: AbortSignal) =>
     call<SkillsEntry[]>('skills.list', scopePayload(scope, { root }), signal),
-  get: (scope: SkillsSessionScope, root: 'user' | 'project', name: string, signal?: AbortSignal) =>
+
+  /** Read one skill from a level root or the library canonical. */
+  get: (scope: SkillsSessionScope, root: SkillsLevelRoot, name: string, signal?: AbortSignal) =>
     call<SkillsFile>('skills.get', scopePayload(scope, { root, name }), signal),
-  create: (scope: SkillsSessionScope, root: 'user' | 'project', input: {
-    name: string
-    description: string
-    whenToUse?: string
-    body?: string
-  }) =>
-    call<{ name: string; path: string }>('skills.create', scopePayload(scope, { root, ...input })),
-  update: (scope: SkillsSessionScope, root: 'user' | 'project', name: string, content: string) =>
+
+  /** Replace the content of a skill (level copy or library canonical). */
+  update: (scope: SkillsSessionScope, root: SkillsLevelRoot, name: string, content: string) =>
     call<{ ok: true }>('skills.update', scopePayload(scope, { root, name, content })),
-  delete: (scope: SkillsSessionScope, root: 'user' | 'project', name: string) =>
-    call<{ ok: true }>('skills.delete', scopePayload(scope, { root, name })),
-  rename: (scope: SkillsSessionScope, root: 'user' | 'project', name: string, newName: string) =>
-    call<{ name: string; path: string }>('skills.rename', scopePayload(scope, { root, name, newName })),
-  move: (scope: SkillsSessionScope, root: 'user' | 'project', name: string, to: 'user' | 'project') =>
-    call<{ name: string; path: string }>('skills.move', scopePayload(scope, { root, name, to })),
+
+  /** Delete a skill everywhere (library canonical + all level copies). */
+  delete: (scope: SkillsSessionScope, name: string) =>
+    call<{ ok: true }>('skills.delete', scopePayload(scope, { name })),
+
+  /** Rename a skill everywhere (library canonical + all level copies). */
+  rename: (scope: SkillsSessionScope, name: string, newName: string) =>
+    call<{ name: string }>('skills.rename', scopePayload(scope, { name, newName })),
+
+  /** Recycle a skill from one level (remove that copy only). */
+  recycle: (scope: SkillsSessionScope, root: 'user' | 'project', name: string) =>
+    call<{ ok: true }>('skills.recycle', scopePayload(scope, { root, name })),
+
+  /** List the library (canonical skills + assignments + indexed projects). */
+  libraryList: (scope: SkillsSessionScope, signal?: AbortSignal) =>
+    call<SkillsLibraryData>('skills.library.list', scopePayload(scope, {}), signal),
+
+  /** 移至 a library skill to the user/global level or the current project
+   *  (copy the canonical; an existing copy is overwritten). */
+  libraryAssign: (scope: SkillsSessionScope, name: string, to: SkillsAssignTarget) =>
+    call<{ name: string; path: string }>('skills.library.assign', scopePayload(scope, { name, to })),
+
+  /** Open the selected level's folder in the OS file manager. */
+  openFolder: (scope: SkillsSessionScope, root: SkillsLevelRoot) =>
+    call<{ ok: true; path: string }>('skills.openFolder', scopePayload(scope, { root })),
 }

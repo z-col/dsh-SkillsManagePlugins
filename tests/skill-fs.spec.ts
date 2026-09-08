@@ -9,17 +9,28 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   assertSkillName,
+  assignmentTargetsOf,
   bundleSkillPath,
+  copySkillEntryToRoot,
   createBundleSkill,
+  deleteSkillEverywhere,
   deleteSkillEntry,
   flatSkillPath,
-  moveSkillEntry,
+  librarySkillsRoot,
+  readProjectIndex,
   readSkillFile,
+  reconcileLibrary,
+  recordProjectRoot,
+  recycleSkillFromRoot,
+  renameSkillEverywhere,
   renameSkillEntry,
   scanSkillsRoot,
   serializeSkillFile,
+  skillExistsInRoot,
+  syncSkillEntry,
   updateSkillFile,
   userSkillsRoot,
+  projectSkillsRoot,
   assertWithinRoot,
   findProjectRoot,
 } from '../src/skill-fs.ts'
@@ -184,60 +195,139 @@ describe('renameSkillEntry', () => {
   })
 })
 
-describe('moveSkillEntry', () => {
-  it('moves a bundle skill to another root and removes the source', async () => {
-    const userRoot = await scratch()
-    const projectRoot = await scratch()
-    const entry = await createBundleSkill(userRoot, { name: 'demo', description: 'Demo' })
-    // Assets inside the bundle directory travel with the skill.
-    await writeFile(join(entry.directory, 'extra.txt'), 'asset')
-    const moved = await moveSkillEntry(entry, projectRoot)
-    expect(moved.name).toBe('demo')
-    expect(moved.form).toBe('bundle')
-    expect(moved.path).toBe(join(projectRoot, 'demo', 'SKILL.md'))
-    // Source is gone; the destination holds the whole directory.
-    await expect(readFile(entry.path, 'utf8')).rejects.toThrow()
-    expect(await readFile(join(projectRoot, 'demo', 'extra.txt'), 'utf8')).toBe('asset')
-    expect((await readFile(moved.path, 'utf8')).includes('name: demo')).toBe(true)
-    await rm(userRoot, { recursive: true, force: true })
-    await rm(projectRoot, { recursive: true, force: true })
+/** Point DSH_HOME at a scratch dir for the duration of one callback. */
+async function withDshHome<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+  const original = process.env.DSH_HOME
+  process.env.DSH_HOME = dir
+  try {
+    return await fn()
+  } finally {
+    if (original === undefined) delete process.env.DSH_HOME
+    else process.env.DSH_HOME = original
+  }
+}
+
+describe('skill library (canonical store + assignments)', () => {
+  it('records and reads project roots in the index (idempotent)', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      expect(await readProjectIndex()).toEqual([])
+      await recordProjectRoot('/proj/a')
+      await recordProjectRoot('/proj/b')
+      await recordProjectRoot('/proj/a')
+      expect(await readProjectIndex()).toEqual(['/proj/a', '/proj/b'])
+    })
+    await rm(home, { recursive: true, force: true })
   })
 
-  it('moves a flat skill', async () => {
-    const userRoot = await scratch()
-    const projectRoot = await scratch()
-    await writeFile(join(userRoot, 'demo.md'), skillText('demo', 'Demo'))
-    const entry = (await scanSkillsRoot(userRoot)).find(candidate => candidate.name === 'demo')
-    expect(entry?.form).toBe('flat')
-    const moved = await moveSkillEntry(entry!, projectRoot)
-    expect(moved.path).toBe(join(projectRoot, 'demo.md'))
-    await expect(readFile(join(userRoot, 'demo.md'), 'utf8')).rejects.toThrow()
-    expect(await readFile(moved.path, 'utf8')).toContain('description: Demo')
-    await rm(userRoot, { recursive: true, force: true })
-    await rm(projectRoot, { recursive: true, force: true })
+  it('reconciles existing user and project skills into the library (bundle form)', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      await createBundleSkill(userSkillsRoot(), { name: 'user-skill', description: 'From user' })
+      const projectRoot = join(home, 'proj')
+      await mkdir(join(projectRoot, '.dsh', 'skills'), { recursive: true })
+      await writeFile(join(projectRoot, '.dsh', 'skills', 'proj-skill.md'), skillText('proj-skill', 'From project'))
+      await reconcileLibrary([projectRoot])
+      const lib = await scanSkillsRoot(librarySkillsRoot())
+      expect(lib.map(entry => entry.name).sort()).toEqual(['proj-skill', 'user-skill'])
+      // Flat project skills are canonicalized to bundle form in the library.
+      const proj = lib.find(entry => entry.name === 'proj-skill')
+      expect(proj?.form).toBe('bundle')
+      expect(await readFile(join(librarySkillsRoot(), 'proj-skill', 'SKILL.md'), 'utf8')).toContain('From project')
+      // Idempotent: a second pass adds nothing.
+      await reconcileLibrary([projectRoot])
+      expect(await scanSkillsRoot(librarySkillsRoot())).toHaveLength(2)
+    })
+    await rm(home, { recursive: true, force: true })
   })
 
-  it('refuses to move onto an existing name (no-clobber)', async () => {
-    const userRoot = await scratch()
-    const projectRoot = await scratch()
-    await createBundleSkill(userRoot, { name: 'demo', description: 'A' })
-    await createBundleSkill(projectRoot, { name: 'demo', description: 'B' })
-    const entry = (await scanSkillsRoot(userRoot))[0]!
-    await expect(moveSkillEntry(entry, projectRoot)).rejects.toMatchObject({ code: 'conflict' })
-    // The source skill survives untouched.
-    expect(await scanSkillsRoot(userRoot)).toHaveLength(1)
-    await rm(userRoot, { recursive: true, force: true })
-    await rm(projectRoot, { recursive: true, force: true })
+  it('assigns a library skill to a project (copy; canonical survives)', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      await createBundleSkill(librarySkillsRoot(), { name: 'demo', description: 'Demo' })
+      const canonical = (await scanSkillsRoot(librarySkillsRoot()))[0]!
+      const projectRoot = join(home, 'proj')
+      const copied = await copySkillEntryToRoot(canonical, projectSkillsRoot(projectRoot))
+      expect(copied.path).toBe(join(projectRoot, '.dsh', 'skills', 'demo', 'SKILL.md'))
+      expect(await scanSkillsRoot(librarySkillsRoot())).toHaveLength(1)
+      expect(await assignmentTargetsOf(canonical, [projectRoot])).toEqual([`project:${projectRoot}`])
+      // The user copy is absent, so 'user' is not an assignment yet.
+      expect(await skillExistsInRoot(userSkillsRoot(), 'demo')).toBe(false)
+    })
+    await rm(home, { recursive: true, force: true })
   })
 
-  it('creates a missing destination root on demand', async () => {
-    const userRoot = await scratch()
-    const projectRoot = join(userRoot, 'nested', 'proj', '.dsh', 'skills')
-    const entry = await createBundleSkill(userRoot, { name: 'demo', description: 'Demo' })
-    const moved = await moveSkillEntry(entry, projectRoot)
-    expect(moved.path).toBe(join(projectRoot, 'demo', 'SKILL.md'))
-    expect(await scanSkillsRoot(userRoot)).toHaveLength(0)
-    await rm(userRoot, { recursive: true, force: true })
+  it('refuses to assign onto an existing name and overwrites on sync', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      await createBundleSkill(librarySkillsRoot(), { name: 'demo', description: 'v2' })
+      const entry = (await scanSkillsRoot(librarySkillsRoot()))[0]!
+      const projectRoot = join(home, 'proj')
+      const dest = projectSkillsRoot(projectRoot)
+      await createBundleSkill(dest, { name: 'demo', description: 'v1' })
+      await expect(copySkillEntryToRoot(entry, dest)).rejects.toMatchObject({ code: 'conflict' })
+      // The copy stays untouched by a failed assign.
+      expect((await readSkillFile(join(dest, 'demo', 'SKILL.md'))).description).toBe('v1')
+      // Sync overwrites the copy with the canonical.
+      await syncSkillEntry(entry, [projectRoot])
+      expect((await readSkillFile(join(dest, 'demo', 'SKILL.md'))).description).toBe('v2')
+    })
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('recycles a copy but keeps the canonical', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      const canonical = await createBundleSkill(librarySkillsRoot(), { name: 'demo', description: 'Demo' })
+      const projectRoot = join(home, 'proj')
+      await copySkillEntryToRoot(canonical, projectSkillsRoot(projectRoot))
+      await recycleSkillFromRoot('demo', projectSkillsRoot(projectRoot))
+      expect(await skillExistsInRoot(projectSkillsRoot(projectRoot), 'demo')).toBe(false)
+      expect(await scanSkillsRoot(librarySkillsRoot())).toHaveLength(1)
+      // Recycling an absent copy is a not-found error.
+      await expect(recycleSkillFromRoot('demo', projectSkillsRoot(projectRoot))).rejects.toMatchObject({ code: 'not-found' })
+    })
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('deletes a skill everywhere (library + user + projects)', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      const canonical = await createBundleSkill(librarySkillsRoot(), { name: 'demo', description: 'Demo' })
+      await copySkillEntryToRoot(canonical, userSkillsRoot())
+      const projectRoot = join(home, 'proj')
+      await copySkillEntryToRoot(canonical, projectSkillsRoot(projectRoot))
+      await deleteSkillEverywhere('demo', [projectRoot])
+      expect(await scanSkillsRoot(librarySkillsRoot())).toHaveLength(0)
+      expect(await scanSkillsRoot(userSkillsRoot())).toHaveLength(0)
+      expect(await scanSkillsRoot(projectSkillsRoot(projectRoot))).toHaveLength(0)
+      await expect(deleteSkillEverywhere('demo', [projectRoot])).rejects.toMatchObject({ code: 'not-found' })
+    })
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('renames a skill everywhere and rewrites the frontmatter name', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      await createBundleSkill(librarySkillsRoot(), { name: 'old-name', description: 'Demo' })
+      const projectRoot = join(home, 'proj')
+      await copySkillEntryToRoot((await scanSkillsRoot(librarySkillsRoot()))[0]!, projectSkillsRoot(projectRoot))
+      await renameSkillEverywhere('old-name', 'new-name', [projectRoot])
+      expect((await scanSkillsRoot(librarySkillsRoot())).map(entry => entry.name)).toEqual(['new-name'])
+      expect((await scanSkillsRoot(projectSkillsRoot(projectRoot))).map(entry => entry.name)).toEqual(['new-name'])
+      expect((await readSkillFile(join(projectSkillsRoot(projectRoot), 'new-name', 'SKILL.md'))).name).toBe('new-name')
+    })
+    await rm(home, { recursive: true, force: true })
+  })
+
+  it('refuses to rename onto a name that exists anywhere', async () => {
+    const home = await scratch()
+    await withDshHome(home, async () => {
+      await createBundleSkill(librarySkillsRoot(), { name: 'a', description: 'A' })
+      await createBundleSkill(librarySkillsRoot(), { name: 'b', description: 'B' })
+      await expect(renameSkillEverywhere('a', 'b', [])).rejects.toMatchObject({ code: 'conflict' })
+    })
+    await rm(home, { recursive: true, force: true })
   })
 })
 

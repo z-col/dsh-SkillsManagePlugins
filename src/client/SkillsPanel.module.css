@@ -34,6 +34,30 @@
   margin-left: auto;
 }
 
+/* The square icon button at the far right of the toolbar (open folder). */
+.iconButton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
+  border-radius: 8px;
+  background: transparent;
+  color: var(--dsw-alias-label-secondary, #555);
+  cursor: pointer;
+}
+
+.iconButton:hover {
+  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
+}
+
+.iconButton:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
 .tab {
   padding: 5px 12px;
   border: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
@@ -143,7 +167,8 @@
   text-align: left;
 }
 
-.skillCard:hover {
+.skillCard:hover,
+.skillCardActive {
   background: var(--dsw-alias-interactive-bg-hover-accent, rgba(22, 100, 255, 0.06));
 }
 
@@ -180,6 +205,24 @@
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* ── Skill library surface ── */
+
+.libraryWrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.libraryHeader {
+  padding: 2px 2px 0;
+}
+
+.libraryCount {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--dsw-alias-label-tertiary, #888);
 }
 
 /* The 「操作」 button that opens the per-card action menu. */

@@ -316,59 +316,291 @@ export async function renameSkillEntry(
     : { name: newName, path: nextPath, directory: root, form: 'flat', description: entry.description }
 }
 
-/**
- * Move a skill entry to another root (user ↔ project) with no-clobber
- * semantics: the target name must be free, and the copy happens BEFORE the
- * source is deleted, so a failed copy never loses the skill. The destination
- * root chain is created on demand (a fresh project root may not exist yet).
- * The frontmatter `name` field is unchanged — the skill keeps its identity.
- */
-export async function moveSkillEntry(entry: SkillEntry, destRoot: string): Promise<SkillEntry> {
+// ── Skill library (canonical store) + project index ────────────────────────
+//
+// The library is the authoritative home of every skill: <$DSH_HOME>/skill-library.
+// The user root (~/.dsh/skills) and each project root (<root>/.dsh/skills) hold
+// COPIES — an assignment. A skill can be assigned to the user level and to any
+// number of projects at once; unassigning (recycling) removes a copy while the
+// library canonical survives.
+
+/** The canonical skill-library root: <$DSH_HOME>/skill-library. */
+export function librarySkillsRoot(): string {
+  return join(resolveDshHome(), 'skill-library')
+}
+
+/** The skills-manager state index: <$DSH_HOME>/skills-manager/index.json. */
+export function skillsIndexPath(): string {
+  return join(resolveDshHome(), 'skills-manager', 'index.json')
+}
+
+/** Read the recorded project roots from the index (missing/corrupt → []). */
+export async function readProjectIndex(): Promise<string[]> {
+  try {
+    const raw = await readFile(skillsIndexPath(), 'utf8')
+    const parsed = JSON.parse(raw) as { projects?: unknown } | null
+    if (parsed === null || !Array.isArray(parsed.projects)) return []
+    return parsed.projects
+      .filter((entry): entry is string => typeof entry === 'string' && entry.length > 0)
+      .map(entry => resolvePath(entry))
+  } catch {
+    return []
+  }
+}
+
+/** Record a project root into the index (idempotent; atomic write). */
+export async function recordProjectRoot(root: string): Promise<void> {
+  const projects = await readProjectIndex()
+  const canonical = resolvePath(root)
+  if (projects.some(project => project === canonical)) return
+  projects.push(canonical)
+  projects.sort((a, b) => a.localeCompare(b))
+  const indexPath = skillsIndexPath()
+  await mkdir(dirname(indexPath), { recursive: true })
+  await writeFileAtomic(indexPath, JSON.stringify({ version: 1, projects }, null, 2) + '\n', { mode: 0o644 })
+}
+
+/** Whether a skill name exists in a root (bundle directory or flat file). */
+export async function skillExistsInRoot(root: string, name: string): Promise<boolean> {
+  const skillName = assertSkillName(name)
+  for (const candidate of [join(root, skillName), join(root, `${skillName}.md`)]) {
+    try {
+      await access(candidate)
+      return true
+    } catch {
+      // absent — try the next form
+    }
+  }
+  return false
+}
+
+/** Remove a skill name from a root (bundle directory or flat file). Throws
+ *  not-found when neither form is present. */
+export async function removeSkillNameFromRoot(root: string, name: string): Promise<void> {
+  const skillName = assertSkillName(name)
+  let removed = false
+  try {
+    await rm(join(root, skillName), { recursive: true, force: false })
+    removed = true
+  } catch {
+    // not a bundle directory
+  }
+  if (!removed) {
+    try {
+      await rm(join(root, `${skillName}.md`), { force: false })
+      removed = true
+    } catch {
+      // not a flat file
+    }
+  }
+  if (!removed) {
+    throw new SkillsError('not-found', `skill "${name}" is not present in this root`, 404)
+  }
+}
+
+/** Copy a skill entry into a destination root, preserving its form. With
+ *  `overwrite` an existing copy is replaced (the stale opposite form is
+ *  removed first); otherwise the target must be free (no-clobber → conflict).
+ *  The destination root chain is created on demand. */
+export async function copySkillEntryToRoot(
+  entry: Pick<SkillEntry, 'name' | 'form' | 'directory' | 'path' | 'description'>,
+  destRoot: string,
+  options: { overwrite?: boolean } = {},
+): Promise<SkillEntry> {
   const root = resolvePath(destRoot)
-  const targetPath = entry.form === 'bundle'
-    ? join(root, assertSkillName(entry.name))
-    : join(root, `${assertSkillName(entry.name)}.md`)
-  // Never move onto itself (e.g. user root and project root resolve to the
-  // same directory in an odd layout) — that would silently delete the skill.
-  if (resolvePath(targetPath) === resolvePath(entry.directory)) {
-    throw new SkillsError('bad-request', 'source and destination are the same location')
+  const name = assertSkillName(entry.name)
+  if (await skillExistsInRoot(root, name)) {
+    if (options.overwrite !== true) {
+      throw new SkillsError('conflict', `skill "${name}" already exists in the destination root`, 409)
+    }
+    await removeSkillNameFromRoot(root, name)
   }
-  try {
-    await access(targetPath)
-    throw new SkillsError('conflict', `skill "${entry.name}" already exists in the destination root`, 409)
-  } catch (error) {
-    if (error instanceof SkillsError) throw error
-    // ENOENT: the destination name is free — proceed.
-  }
-  try {
-    await mkdir(root, { recursive: true })
-  } catch (error) {
-    throw new SkillsError('fs-error', `cannot create destination root "${root}": ${error instanceof Error ? error.message : String(error)}`)
-  }
-  // Copy first; only delete the source after the copy fully lands.
+  await mkdir(root, { recursive: true })
+  const target = entry.form === 'bundle'
+    ? join(root, name)
+    : join(root, `${name}.md`)
   try {
     if (entry.form === 'bundle') {
-      await cp(entry.directory, targetPath, { recursive: true })
+      await cp(entry.directory, target, { recursive: true })
     } else {
-      await copyFile(entry.path, targetPath)
+      await copyFile(entry.path, target)
     }
   } catch (error) {
-    throw new SkillsError('fs-error', `cannot copy skill "${entry.name}" to "${root}": ${error instanceof Error ? error.message : String(error)}`)
-  }
-  try {
-    await rm(entry.form === 'bundle' ? entry.directory : entry.path, { recursive: true, force: false })
-  } catch (error) {
-    // The copy landed but the source cleanup failed: keep the duplicate and
-    // report the partial state instead of pretending the move succeeded.
-    throw new SkillsError('fs-error', `moved "${entry.name}" to "${root}" but could not remove the source: ${error instanceof Error ? error.message : String(error)}`)
+    throw new SkillsError('fs-error', `cannot copy skill "${name}": ${error instanceof Error ? error.message : String(error)}`)
   }
   return {
-    name: entry.name,
-    path: entry.form === 'bundle' ? join(targetPath, 'SKILL.md') : targetPath,
-    directory: entry.form === 'bundle' ? targetPath : root,
+    name,
+    path: entry.form === 'bundle' ? join(target, 'SKILL.md') : target,
+    directory: entry.form === 'bundle' ? target : root,
     form: entry.form,
-    description: entry.description,
-    ...(entry.whenToUse !== undefined ? { whenToUse: entry.whenToUse } : {}),
+    description: entry.description ?? '',
+  }
+}
+
+/** Import one skill entry into the canonical library, normalized to bundle
+ *  form (so the library never holds two entries with the same name). */
+async function importSkillToLibrary(entry: SkillEntry): Promise<void> {
+  const lib = librarySkillsRoot()
+  const targetDir = join(lib, assertSkillName(entry.name))
+  await mkdir(lib, { recursive: true })
+  try {
+    if (entry.form === 'bundle') {
+      await cp(entry.directory, targetDir, { recursive: true })
+    } else {
+      await mkdir(targetDir, { recursive: false })
+      await writeFileAtomic(join(targetDir, 'SKILL.md'), await readFile(entry.path, 'utf8'), { mode: 0o644 })
+    }
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code
+    if (code === 'EEXIST') return // another form was already imported under this name
+    throw new SkillsError('fs-error', `cannot import skill "${entry.name}" into the library: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** Reconcile the library with the user root and every recorded project root:
+ *  skills present in those roots but missing from the library are copied in
+ *  (canonicalized as bundle form). Idempotent; missing roots are skipped. */
+export async function reconcileLibrary(projectRoots: string[]): Promise<void> {
+  const lib = librarySkillsRoot()
+  await mkdir(lib, { recursive: true })
+  const seen = new Set<string>()
+  for (const entry of await scanSkillsRoot(lib)) seen.add(entry.name)
+  const roots = [userSkillsRoot(), ...projectRoots.map(projectSkillsRoot)]
+  for (const root of roots) {
+    let entries: SkillEntry[]
+    try {
+      entries = await scanSkillsRoot(root)
+    } catch {
+      continue
+    }
+    for (const entry of entries) {
+      if (seen.has(entry.name)) continue
+      try {
+        await importSkillToLibrary(entry)
+        seen.add(entry.name)
+      } catch {
+        // keep going — one unreadable skill must not block reconciliation
+      }
+    }
+  }
+}
+
+/** The assignment targets of a canonical skill: 'user' and/or 'project:<root>'
+ *  for every root where a copy currently exists. */
+export async function assignmentTargetsOf(
+  entry: Pick<SkillEntry, 'name'>,
+  projectRoots: string[],
+): Promise<Array<'user' | `project:${string}`>> {
+  const targets: Array<'user' | `project:${string}`> = []
+  if (await skillExistsInRoot(userSkillsRoot(), entry.name)) targets.push('user')
+  for (const projectRootPath of projectRoots) {
+    if (await skillExistsInRoot(projectSkillsRoot(projectRootPath), entry.name)) {
+      targets.push(`project:${projectRootPath}`)
+    }
+  }
+  return targets
+}
+
+/** Push the canonical library copy to every root where the skill is assigned
+ *  (overwrite). Returns the refreshed targets. */
+export async function syncSkillEntry(
+  entry: SkillEntry,
+  projectRoots: string[],
+): Promise<Array<'user' | `project:${string}`>> {
+  const targets = await assignmentTargetsOf(entry, projectRoots)
+  for (const target of targets) {
+    const destRoot = target === 'user'
+      ? userSkillsRoot()
+      : projectSkillsRoot(target.slice('project:'.length))
+    await copySkillEntryToRoot(entry, destRoot, { overwrite: true })
+  }
+  return targets
+}
+
+/** Recycle a skill from one level root (user or project): remove the copy,
+ *  keep the library canonical. */
+export async function recycleSkillFromRoot(name: string, destRoot: string): Promise<void> {
+  await removeSkillNameFromRoot(resolvePath(destRoot), assertSkillName(name))
+}
+
+/** Delete a skill everywhere: the library canonical, the user root, and every
+ *  recorded project root. Throws not-found when the skill is nowhere. */
+export async function deleteSkillEverywhere(name: string, projectRoots: string[]): Promise<void> {
+  const skillName = assertSkillName(name)
+  const roots = [librarySkillsRoot(), userSkillsRoot(), ...projectRoots.map(projectSkillsRoot)]
+  let removed = 0
+  for (const root of roots) {
+    if (await skillExistsInRoot(root, skillName)) {
+      await removeSkillNameFromRoot(root, skillName)
+      removed += 1
+    }
+  }
+  if (removed === 0) {
+    throw new SkillsError('not-found', `skill "${name}" not found`, 404)
+  }
+}
+
+/** Rename a skill in a single root (bundle directory or flat file), rewriting
+ *  the frontmatter name (no-clobber on the target in this root). */
+export async function renameSkillInRoot(root: string, name: string, newName: string): Promise<void> {
+  const rootResolved = resolvePath(root)
+  const target = assertSkillName(newName)
+  if (await skillExistsInRoot(rootResolved, target)) {
+    throw new SkillsError('conflict', `skill "${newName}" already exists`, 409)
+  }
+  const sourceDir = join(rootResolved, name)
+  const sourceFile = join(rootResolved, `${name}.md`)
+  let sourcePath: string
+  let isBundle: boolean
+  try {
+    await access(sourceDir)
+    sourcePath = sourceDir
+    isBundle = true
+  } catch {
+    try {
+      await access(sourceFile)
+      sourcePath = sourceFile
+      isBundle = false
+    } catch {
+      throw new SkillsError('not-found', `skill "${name}" not found in this root`, 404)
+    }
+  }
+  try {
+    await rename(sourcePath, isBundle ? join(rootResolved, target) : join(rootResolved, `${target}.md`))
+  } catch (error) {
+    throw new SkillsError('fs-error', `cannot rename "${name}" to "${newName}": ${error instanceof Error ? error.message : String(error)}`)
+  }
+  const nextPath = isBundle ? join(rootResolved, target, 'SKILL.md') : join(rootResolved, `${target}.md`)
+  try {
+    const content = await readSkillFile(nextPath)
+    await updateSkillFile(nextPath, rewriteFrontmatterName(content.raw, newName))
+  } catch (error) {
+    if (error instanceof SkillsError) throw error
+    throw new SkillsError('fs-error', `cannot update frontmatter after renaming: ${error instanceof Error ? error.message : String(error)}`)
+  }
+}
+
+/** Rename a skill everywhere: the library canonical, the user root, and every
+ *  recorded project root. The new name must be free in ALL locations
+ *  (no-clobber); at least one location must hold the old name. */
+export async function renameSkillEverywhere(name: string, newName: string, projectRoots: string[]): Promise<void> {
+  assertSkillName(name)
+  const target = assertSkillName(newName)
+  const roots = [librarySkillsRoot(), userSkillsRoot(), ...projectRoots.map(projectSkillsRoot)]
+  for (const root of roots) {
+    if (await skillExistsInRoot(root, target)) {
+      throw new SkillsError('conflict', `skill "${newName}" already exists in another location`, 409)
+    }
+  }
+  let renamed = 0
+  for (const root of roots) {
+    if (await skillExistsInRoot(root, name)) {
+      await renameSkillInRoot(root, name, newName)
+      renamed += 1
+    }
+  }
+  if (renamed === 0) {
+    throw new SkillsError('not-found', `skill "${name}" not found`, 404)
   }
 }
 

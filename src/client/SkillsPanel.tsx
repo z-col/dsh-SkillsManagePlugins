@@ -1,17 +1,22 @@
 /**
- * The Skills manager views: browse the user-level or project-level skill
- * roots, open a skill's full SKILL.md (raw frontmatter + body), edit and
- * save it, create new skills, delete, and rename. All data rides the
- * plugin's own fenced /skills API.
+ * The Skills manager views: browse the user-level, project-level, and Skill
+ * library surfaces, open a skill's full SKILL.md (raw frontmatter + body),
+ * edit and save it, create new skills, and manage assignments.
+ *
+ * Skill model: the library (<$DSH_HOME>/skill-library) is the canonical home
+ * of every skill; the user/project tabs show the COPIES assigned to those
+ * levels. Assigning copies a library skill to a level, recycling removes one
+ * copy, rename/delete operate everywhere (canonical + all copies), and sync
+ * pushes the canonical to every copy.
  *
  * The views are mounted by the dsh-better-sidebar tab ({@link SkillsTab});
  * the {@link SkillsManagerBody} receives the request scope explicitly so the
  * shell supplies the current session's facts.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconFolderOpen16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SkillsPanelStore, SkillsScope } from './state.ts'
-import type { SkillsEntry, SkillsFile } from './api.ts'
+import type { SkillsAssignTarget, SkillsEntry, SkillsFile, SkillsLevelRoot, SkillsLibraryData } from './api.ts'
 import { api, SkillsApiError } from './api.ts'
 import { t } from './locales.ts'
 import css from './SkillsPanel.module.css'
@@ -23,9 +28,9 @@ function messageOf(error: unknown): string {
 }
 
 /**
- * The shared manager body: root tabs, action row, and the list/detail/create
- * views. `scope` is the request scope the body's API calls ride (session id +
- * cwd), supplied by the mounting shell.
+ * The shared manager body: root tabs (用户级 / 项目级 / Skill 库), the action
+ * row, and the list/detail/create views. `scope` is the request scope the
+ * body's API calls ride (session id + cwd), supplied by the mounting shell.
  */
 export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: SkillsScope }) {
   const { store, scope } = props
@@ -41,13 +46,16 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
   const sessionId = scope.sessionId
   const cwd = scope.cwd
 
-  /** The entries currently shown, tagged with the root they came from. */
+  /** The entries currently shown for a LEVEL root, tagged with its kind. */
   const [loaded, setLoaded] = useState<{ root: 'user' | 'project'; entries: SkillsEntry[] } | null>(null)
+  /** The library payload (canonical skills + assignments + projects). */
+  const [libraryData, setLibraryData] = useState<SkillsLibraryData | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [openingFolder, setOpeningFolder] = useState(false)
   const requestSeq = useRef(0)
 
-  const load = useCallback(async (root: 'user' | 'project', sessionId0: string, cwd0: string | undefined) => {
+  const loadLevel = useCallback(async (root: 'user' | 'project', sessionId0: string, cwd0: string | undefined) => {
     const seq = ++requestSeq.current
     setLoading(true)
     setError(null)
@@ -63,14 +71,56 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
     }
   }, [])
 
+  const loadLibrary = useCallback(async (sessionId0: string, cwd0: string | undefined) => {
+    const seq = ++requestSeq.current
+    setLoading(true)
+    setError(null)
+    try {
+      const next = await api.libraryList({ sessionId: sessionId0, cwd: cwd0 })
+      if (seq !== requestSeq.current) return
+      setLibraryData(next)
+      setLoading(false)
+    } catch (cause) {
+      if (seq !== requestSeq.current) return
+      setError(messageOf(cause))
+      setLoading(false)
+    }
+  }, [])
+
   useEffect(() => {
-    void load(state.root, sessionId, cwd)
-  }, [state.root, sessionId, cwd, load])
+    if (state.root === 'library') void loadLibrary(sessionId, cwd)
+    else void loadLevel(state.root, sessionId, cwd)
+  }, [state.root, sessionId, cwd, loadLevel, loadLibrary])
+
+  const reload = useCallback(() => {
+    if (state.root === 'library') void loadLibrary(sessionId, cwd)
+    else void loadLevel(state.root, sessionId, cwd)
+  }, [state.root, sessionId, cwd, loadLevel, loadLibrary])
+
+  /** Open the currently selected level's folder in the OS file manager. */
+  const openCurrentFolder = useCallback(async (): Promise<void> => {
+    setOpeningFolder(true)
+    setError(null)
+    try {
+      await api.openFolder({ sessionId, cwd }, state.root)
+    } catch (cause) {
+      setError(messageOf(cause))
+    } finally {
+      setOpeningFolder(false)
+    }
+  }, [sessionId, cwd, state.root])
 
   return (
     <>
       <div className={css.toolbar}>
         <div className={css.tabs}>
+          <button
+            type="button"
+            className={`${css.tab} ${state.root === 'library' ? css.tabActive : ''}`}
+            onClick={() => store.actions.switchRoot('library')}
+          >
+            {t('libraryTab')}
+          </button>
           <button
             type="button"
             className={`${css.tab} ${state.root === 'user' ? css.tabActive : ''}`}
@@ -87,7 +137,7 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
           </button>
         </div>
         <div className={css.actions}>
-          {state.view !== 'list' ? (
+          {state.view !== 'list' && (
             <button
               type="button"
               className={css.ghostButton}
@@ -95,53 +145,62 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
             >
               ← {t('back')}
             </button>
-          ) : (
-            <button
-              type="button"
-              className={css.primaryButton}
-              onClick={() => store.actions.showCreate()}
-            >
-              + {t('newSkill')}
-            </button>
           )}
+          <button
+            type="button"
+            className={css.iconButton}
+            title={t('openFolder')}
+            aria-label={t('openFolder')}
+            disabled={openingFolder}
+            onClick={() => { void openCurrentFolder() }}
+          >
+            <IconFolderOpen16 />
+          </button>
         </div>
       </div>
       {error !== null && <div className={css.error}>{error}</div>}
       <div className={css.body}>
         {state.view === 'list' && (
-          <ListView
-            entries={loaded !== null && loaded.root === state.root ? loaded.entries : null}
-            loading={loading}
-            emptyLabel={state.root === 'user' ? t('emptyUser') : t('emptyProject')}
-            root={state.root}
-            scope={scope}
-            onOpen={(name) => store.actions.showDetail(name)}
-            onChanged={() => { void load(state.root, sessionId, cwd) }}
-          />
+          state.root === 'library' ? (
+            <LibraryView
+              data={libraryData}
+              loading={loading}
+              scope={scope}
+              onOpen={(name) => store.actions.showDetail(name)}
+              onChanged={reload}
+            />
+          ) : (
+            <ListView
+              entries={loaded !== null && loaded.root === state.root ? loaded.entries : null}
+              loading={loading}
+              emptyLabel={state.root === 'user' ? t('emptyUser') : t('emptyProject')}
+              root={state.root}
+              scope={scope}
+              onOpen={(name) => store.actions.showDetail(name)}
+              onChanged={reload}
+            />
+          )
         )}
         {state.view === 'detail' && (
-          <DetailView store={store} root={state.root} name={state.selectedName} scope={scope} onChanged={() => { void load(state.root, sessionId, cwd) }} />
-        )}
-        {state.view === 'create' && (
-          <CreateView store={store} root={state.root} scope={scope} onCreated={() => { void load(state.root, sessionId, cwd) }} />
+          <DetailView store={store} root={state.root} name={state.selectedName} scope={scope} onChanged={reload} />
         )}
       </div>
     </>
   )
 }
 
-/** One open card menu: which skill, and which step is showing. */
+/** One open card menu (level list): which skill, and which step is showing. */
 type CardMenu =
   | { name: string; mode: 'actions' }
   | { name: string; mode: 'rename' }
-  | { name: string; mode: 'confirm-delete' }
+  | { name: string; mode: 'confirm-recycle' }
   | null
 
 /**
- * The list view: skill cards with a per-card 「操作」 menu (rename / delete /
- * move to the other level). `entries` is null only while the CURRENT root has
- * never loaded; a refresh keeps the previous entries on screen (no full-panel
- * flash), the loading state is only visible on first load.
+ * The LEVEL list view (用户级 / 项目级): skill cards with a per-card 「操作」
+ * menu (rename everywhere / recycle from this level). `entries` is null only
+ * while the CURRENT root has never loaded; a refresh keeps the previous
+ * entries on screen (no full-panel flash).
  */
 function ListView(props: {
   entries: SkillsEntry[] | null
@@ -212,7 +271,7 @@ function ListView(props: {
     setBusyName(name)
     setError(null)
     try {
-      await api.rename(scope, root, name, next)
+      await api.rename(scope, name, next)
       closeMenu()
       onChanged()
     } catch (cause) {
@@ -221,13 +280,13 @@ function ListView(props: {
     }
   }
 
-  const doDelete = async (): Promise<void> => {
-    if (menu === null || menu.mode !== 'confirm-delete') return
+  const doRecycle = async (): Promise<void> => {
+    if (menu === null || menu.mode !== 'confirm-recycle') return
     const name = menu.name
     setBusyName(name)
     setError(null)
     try {
-      await api.delete(scope, root, name)
+      await api.recycle(scope, root, name)
       closeMenu()
       onChanged()
     } catch (cause) {
@@ -235,23 +294,6 @@ function ListView(props: {
       setBusyName(null)
     }
   }
-
-  const doMove = async (): Promise<void> => {
-    if (menu === null) return
-    const name = menu.name
-    setBusyName(name)
-    setError(null)
-    try {
-      await api.move(scope, root, name, root === 'user' ? 'project' : 'user')
-      closeMenu()
-      onChanged()
-    } catch (cause) {
-      setError(messageOf(cause))
-      setBusyName(null)
-    }
-  }
-
-  const moveLabel = root === 'user' ? t('moveToProject') : t('moveToUser')
 
   if (entries === null) {
     return loading ? <p className={css.status}>{t('loading')}</p> : <p className={css.status}>{t('loadFailed')}</p>
@@ -260,7 +302,7 @@ function ListView(props: {
   return (
     <div className={css.skillList}>
       {entries.map(entry => (
-        <div key={entry.name} className={css.skillCard} data-skill-card>
+        <div key={entry.name} className={`${css.skillCard} ${menu?.name === entry.name ? css.skillCardActive : ''}`} data-skill-card>
           <button
             type="button"
             className={css.skillCardMain}
@@ -299,12 +341,12 @@ function ListView(props: {
                     </button>
                   </div>
                 </>
-              ) : menu.mode === 'confirm-delete' ? (
+              ) : menu.mode === 'confirm-recycle' ? (
                 <>
-                  <p className={css.menuText}>{t('deleteConfirm')}</p>
+                  <p className={css.menuText}>{t('recycleConfirm')}</p>
                   <div className={css.menuActions}>
-                    <button type="button" className={`${css.ghostButton} ${css.dangerButton}`} disabled={busyName !== null} onClick={() => { void doDelete() }}>
-                      {busyName !== null ? '…' : t('delete')}
+                    <button type="button" className={`${css.ghostButton} ${css.dangerButton}`} disabled={busyName !== null} onClick={() => { void doRecycle() }}>
+                      {busyName !== null ? '…' : t('recycle')}
                     </button>
                     <button type="button" className={css.ghostButton} disabled={busyName !== null} onClick={closeMenu}>
                       {t('cancel')}
@@ -316,11 +358,8 @@ function ListView(props: {
                   <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => startRename(entry.name)}>
                     {t('rename')}
                   </button>
-                  <button type="button" className={`${css.menuItem} ${css.menuDanger}`} disabled={busyName !== null} onClick={() => setMenu({ name: entry.name, mode: 'confirm-delete' })}>
-                    {t('delete')}
-                  </button>
-                  <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => { void doMove() }}>
-                    {busyName !== null ? '…' : moveLabel}
+                  <button type="button" className={`${css.menuItem} ${css.menuDanger}`} disabled={busyName !== null} onClick={() => setMenu({ name: entry.name, mode: 'confirm-recycle' })}>
+                    {t('recycle')}
                   </button>
                 </>
               )}
@@ -333,10 +372,220 @@ function ListView(props: {
   )
 }
 
-/** The detail view: full SKILL.md editor with save / delete / rename. */
+/** One open library card menu: which skill, and which step is showing. */
+type LibraryMenu =
+  | { name: string; mode: 'actions' }
+  | { name: string; mode: 'rename' }
+  | { name: string; mode: 'confirm-delete' }
+  | null
+
+/**
+ * The Skill library view: every canonical skill with a per-card menu —
+ * 移至全局 / 移至项目级 / 重命名 / 删除. 移至 copies the canonical into the
+ * target level (the library original stays); rename/delete operate
+ * everywhere (canonical + all copies). Clicking a card opens its canonical.
+ */
+function LibraryView(props: {
+  data: SkillsLibraryData | null
+  loading: boolean
+  scope: SkillsScope
+  onOpen: (name: string) => void
+  onChanged: () => void
+}) {
+  const { data, loading, scope, onOpen, onChanged } = props
+  const [menu, setMenu] = useState<LibraryMenu>(null)
+  const [renameValue, setRenameValue] = useState('')
+  const [busyName, setBusyName] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const closeMenu = (): void => {
+    setMenu(null)
+    setRenameValue('')
+    setError(null)
+    setBusyName(null)
+  }
+
+  useEffect(() => {
+    if (menu === null) return
+    const onPointerDown = (event: PointerEvent): void => {
+      const el = event.target as Element | null
+      if (el !== null && el.closest('[data-skill-card]')) return
+      closeMenu()
+    }
+    const onKeyDown = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') closeMenu()
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    document.addEventListener('keydown', onKeyDown)
+    return () => {
+      document.removeEventListener('pointerdown', onPointerDown)
+      document.removeEventListener('keydown', onKeyDown)
+    }
+  }, [menu])
+
+  if (data === null) {
+    return loading ? <p className={css.status}>{t('loading')}</p> : <p className={css.status}>{t('loadFailed')}</p>
+  }
+
+  const toggleMenu = (name: string): void => {
+    if (menu?.name === name && menu.mode === 'actions') {
+      closeMenu()
+      return
+    }
+    setRenameValue('')
+    setError(null)
+    setMenu({ name, mode: 'actions' })
+  }
+
+  /** 移至 a level: copy the canonical there (upsert — an existing copy is
+   *  refreshed from the library). */
+  const doMoveTo = async (to: SkillsAssignTarget): Promise<void> => {
+    if (menu === null) return
+    const name = menu.name
+    setBusyName(name)
+    setError(null)
+    try {
+      await api.libraryAssign(scope, name, to)
+      closeMenu()
+      onChanged()
+    } catch (cause) {
+      setError(messageOf(cause))
+      setBusyName(null)
+    }
+  }
+
+  const startRename = (name: string): void => {
+    setRenameValue(name)
+    setError(null)
+    setMenu({ name, mode: 'rename' })
+  }
+
+  const doRename = async (): Promise<void> => {
+    if (menu === null || menu.mode !== 'rename') return
+    const name = menu.name
+    const next = renameValue.trim()
+    if (next === '' || next === name) {
+      closeMenu()
+      return
+    }
+    setBusyName(name)
+    setError(null)
+    try {
+      await api.rename(scope, name, next)
+      closeMenu()
+      onChanged()
+    } catch (cause) {
+      setError(messageOf(cause))
+      setBusyName(null)
+    }
+  }
+
+  const doDelete = async (): Promise<void> => {
+    if (menu === null || menu.mode !== 'confirm-delete') return
+    const name = menu.name
+    setBusyName(name)
+    setError(null)
+    try {
+      await api.delete(scope, name)
+      closeMenu()
+      onChanged()
+    } catch (cause) {
+      setError(messageOf(cause))
+      setBusyName(null)
+    }
+  }
+
+  if (data.skills.length === 0) return <p className={css.status}>{t('libraryEmpty')}</p>
+
+  return (
+    <div className={css.libraryWrap}>
+      <div className={css.libraryHeader}>
+        <span className={css.libraryCount}>{t('libraryCount', { count: data.skills.length })}</span>
+      </div>
+      <div className={css.skillList}>
+        {data.skills.map(entry => (
+          <div key={entry.name} className={`${css.skillCard} ${menu?.name === entry.name ? css.skillCardActive : ''}`} data-skill-card>
+            <button
+              type="button"
+              className={css.skillCardMain}
+              onClick={() => { closeMenu(); onOpen(entry.name) }}
+            >
+              <span className={css.skillName}>{entry.name}</span>
+              <span className={css.skillDesc}>{entry.description}</span>
+            </button>
+            <button
+              type="button"
+              className={`${css.opsButton} ${menu?.name === entry.name ? css.opsButtonActive : ''}`}
+              aria-label={t('ops')}
+              onClick={(event) => { event.stopPropagation(); toggleMenu(entry.name) }}
+            >
+              {t('ops')}
+            </button>
+            {menu?.name === entry.name && (
+              <div className={css.cardMenu} onClick={(event) => event.stopPropagation()}>
+                {menu.mode === 'rename' ? (
+                  <>
+                    <label className={css.menuLabel}>{t('renameTo')}</label>
+                    <input
+                      className={css.menuInput}
+                      value={renameValue}
+                      onChange={(e) => setRenameValue(e.target.value)}
+                      placeholder={t('namePlaceholder')}
+                      disabled={busyName !== null}
+                      autoFocus
+                    />
+                    <div className={css.menuActions}>
+                      <button type="button" className={css.primaryButton} disabled={busyName !== null} onClick={() => { void doRename() }}>
+                        {busyName !== null ? '…' : t('confirm')}
+                      </button>
+                      <button type="button" className={css.ghostButton} disabled={busyName !== null} onClick={closeMenu}>
+                        {t('cancel')}
+                      </button>
+                    </div>
+                  </>
+                ) : menu.mode === 'confirm-delete' ? (
+                  <>
+                    <p className={css.menuText}>{t('deleteConfirm')}</p>
+                    <div className={css.menuActions}>
+                      <button type="button" className={`${css.ghostButton} ${css.dangerButton}`} disabled={busyName !== null} onClick={() => { void doDelete() }}>
+                        {busyName !== null ? '…' : t('delete')}
+                      </button>
+                      <button type="button" className={css.ghostButton} disabled={busyName !== null} onClick={closeMenu}>
+                        {t('cancel')}
+                      </button>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => { void doMoveTo('user') }}>
+                      {busyName !== null ? '…' : t('moveToGlobal')}
+                    </button>
+                    <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => { void doMoveTo({ project: data.currentProject }) }}>
+                      {busyName !== null ? '…' : t('moveToProject')}
+                    </button>
+                    <button type="button" className={css.menuItem} disabled={busyName !== null} onClick={() => startRename(entry.name)}>
+                      {t('rename')}
+                    </button>
+                    <button type="button" className={`${css.menuItem} ${css.menuDanger}`} disabled={busyName !== null} onClick={() => setMenu({ name: entry.name, mode: 'confirm-delete' })}>
+                      {t('delete')}
+                    </button>
+                  </>
+                )}
+                {error !== null && <p className={css.menuError}>{error}</p>}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/** The detail view: full SKILL.md editor with save / delete / rename. The
+ *  root may be a level (user/project) or the library canonical. */
 function DetailView(props: {
   store: SkillsPanelStore
-  root: 'user' | 'project'
+  root: SkillsLevelRoot
   name: string
   scope: SkillsScope
   onChanged: () => void
@@ -407,7 +656,7 @@ function DetailView(props: {
     setDeleting(true)
     setError(null)
     try {
-      await api.delete(scope, root, name)
+      await api.delete(scope, name)
       setDeleting(false)
       setConfirmDelete(false)
       store.actions.showList()
@@ -424,7 +673,7 @@ function DetailView(props: {
     setRenamingBusy(true)
     setError(null)
     try {
-      const next = await api.rename(scope, root, name, renameTo.trim())
+      const next = await api.rename(scope, name, renameTo.trim())
       setRenaming(false)
       setRenameTo('')
       setRenamingBusy(false)
@@ -504,108 +753,6 @@ function DetailView(props: {
           </button>
         </div>
       </Modal>
-    </div>
-  )
-}
-
-/** The create view: name / description / whenToUse / body form. */
-function CreateView(props: {
-  store: SkillsPanelStore
-  root: 'user' | 'project'
-  scope: SkillsScope
-  onCreated: () => void
-}) {
-  const { store, root, scope, onCreated } = props
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [whenToUse, setWhenToUse] = useState('')
-  const [body, setBody] = useState('')
-  const [error, setError] = useState<string | null>(null)
-  const [busy, setBusy] = useState(false)
-
-  const submit = async (): Promise<void> => {
-    if (name.trim() === '') {
-      setError(t('formNameRequired'))
-      return
-    }
-    if (description.trim() === '') {
-      setError(t('formDescriptionRequired'))
-      return
-    }
-    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(name.trim())) {
-      setError(t('formNameInvalid'))
-      return
-    }
-    setBusy(true)
-    setError(null)
-    try {
-      await api.create(scope, root, {
-        name: name.trim(),
-        description: description.trim(),
-        ...(whenToUse.trim() !== '' ? { whenToUse: whenToUse.trim() } : {}),
-        ...(body !== '' ? { body } : {}),
-      })
-      setBusy(false)
-      setName('')
-      setDescription('')
-      setWhenToUse('')
-      setBody('')
-      store.actions.showDetail(name.trim())
-      onCreated()
-    } catch (cause) {
-      setError(messageOf(cause))
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className={css.form}>
-      <div className={css.field}>
-        <label className={css.fieldLabel}>{t('nameLabel')}</label>
-        <input
-          className={css.fieldInput}
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder={t('namePlaceholder')}
-        />
-      </div>
-      <div className={css.field}>
-        <label className={css.fieldLabel}>{t('descriptionLabel')}</label>
-        <input
-          className={css.fieldInput}
-          value={description}
-          onChange={(e) => setDescription(e.target.value)}
-          placeholder={t('descriptionPlaceholder')}
-        />
-      </div>
-      <div className={css.field}>
-        <label className={css.fieldLabel}>{t('whenToUseLabel')}</label>
-        <input
-          className={css.fieldInput}
-          value={whenToUse}
-          onChange={(e) => setWhenToUse(e.target.value)}
-          placeholder={t('whenToUsePlaceholder')}
-        />
-      </div>
-      <div className={css.field}>
-        <label className={css.fieldLabel}>{t('bodyLabel')}</label>
-        <textarea
-          className={css.editor}
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder={t('bodyPlaceholder')}
-          spellCheck={false}
-        />
-      </div>
-      {error !== null && <p className={css.fieldError}>{error}</p>}
-      <div className={css.formActions}>
-        <button type="button" className={css.primaryButton} disabled={busy} onClick={() => { void submit() }}>
-          {busy ? '…' : t('confirm')}
-        </button>
-        <button type="button" className={css.ghostButton} onClick={() => store.actions.showList()}>
-          {t('cancel')}
-        </button>
-      </div>
     </div>
   )
 }

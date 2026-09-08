@@ -10,11 +10,11 @@
  * a prop, so a session switch never leaves stale scope in the store.
  */
 
-/** Which skill root the panel is showing. */
-export type SkillsRoot = 'user' | 'project'
+/** Which surface the panel is showing: a level root or the skill library. */
+export type SkillsRoot = 'user' | 'project' | 'library'
 
 /** Panel view mode. */
-export type SkillsView = 'list' | 'detail' | 'create'
+export type SkillsView = 'list' | 'detail'
 
 /** One request scope (session id + optional cwd) the API calls ride. */
 export interface SkillsScope {
@@ -37,7 +37,6 @@ export interface SkillsPanelActions {
   switchRoot(root: SkillsRoot): void
   showList(): void
   showDetail(name: string): void
-  showCreate(): void
 }
 
 /** The store product: immutable snapshot + subscribe + baked actions. */
@@ -71,9 +70,6 @@ export function createSkillsPanelStore(): SkillsPanelStore {
     },
     showDetail(name) {
       set({ view: 'detail', selectedName: name })
-    },
-    showCreate() {
-      set({ view: 'create', selectedName: '' })
     },
   }
   return {

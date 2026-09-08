@@ -2,3 +2,20 @@ node_modules/
 lib/
 *.tsbuildinfo
 .DS_Store
+
+# 不随仓库发布：agent / docs 工作区
+.dev-lead/
+dsh-dev-lead-PROMPT.md
+docs/
+
+# 不随仓库发布：密钥类
+.credentials*
+*.pem
+*.key
+*.p12
+.env
+.env.*
+
+# 不随仓库发布：skill / .dsh 内容（skill 应放在 DSH 家目录或项目 .dsh/skills，不入库）
+**/.dsh/
+skill-library/

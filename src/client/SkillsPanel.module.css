@@ -1,12 +1,27 @@
-/* The better-sidebar tab shell: fills the sidebar pane (the sidebar owns
-   its own chrome — this shell has no header of its own). */
-.tabRoot {
+/* The conversation-view tab body: fills the centre column's view area under
+   the session header + view tab strip (no top-strip padding of its own — that
+   chrome already clears the window's top strip, exactly like 轨迹). */
+.viewRoot {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  align-items: center;
+  box-sizing: border-box;
+  flex: 1;
   min-height: 0;
+  height: 100%;
   overflow: hidden;
-  background: var(--dsw-alias-bg-layer-2, #fff);
+}
+
+/* The manager column: a readable cap on wide screens, full height inside the
+   view area; the toolbar flexes none and `.body` owns the scrolling. */
+.viewInner {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  max-width: 880px;
+  padding: 0 24px;
 }
 
 /* One toolbar row: the root tabs (user/project) on the left, the context
@@ -194,6 +209,33 @@
   color: var(--dsw-alias-label-primary, #1a1a1a);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Library card name row: the name plus the 全局 marker when the skill is
+ * distributed to the global level (project assignments get no marker). */
+.skillNameRow {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.skillNameRow .skillName {
+  min-width: 0;
+}
+
+.badgeGlobal {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--dsw-alias-button-primary-fill, #1664ff);
+  color: var(--dsw-alias-label-primary-inverted, #fff);
+  font-size: 10px;
+  line-height: 16px;
+  font-weight: 500;
   white-space: nowrap;
 }
 
@@ -433,93 +475,4 @@
   font-size: 13px;
   line-height: 20px;
   color: var(--dsw-alias-label-primary, #1a1a1a);
-}
-
-/* ── Standalone surfaces (active only while dsh-better-sidebar is absent) ── */
-
-/* The session-header utility button that toggles the floating panel. */
-.standaloneToggle {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 28px;
-  height: 28px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, #555);
-  cursor: pointer;
-}
-
-.standaloneToggle:hover {
-  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
-}
-
-.standaloneToggleActive {
-  background: var(--dsw-alias-button-primary-fill, #1664ff);
-  color: var(--dsw-alias-label-primary-inverted, #fff);
-}
-
-/* The floating panel (a shell.overlay entry), docked to the right edge.
-   Click-through everywhere else; the panel itself opts into pointer events. */
-.overlayRoot {
-  position: fixed;
-  top: 0;
-  right: 0;
-  bottom: 0;
-  z-index: 2000;
-  width: min(400px, 92vw);
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--dsw-alias-border-l2, rgba(0, 0, 0, 0.1));
-  background: var(--dsw-alias-bg-layer-2, #fff);
-  box-shadow: -8px 0 24px rgba(0, 0, 0, 0.12);
-  pointer-events: auto;
-}
-
-.overlayHeader {
-  flex: none;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 10px 14px;
-  border-bottom: 1px solid var(--dsw-alias-border-l1, rgba(0, 0, 0, 0.06));
-}
-
-.overlayTitle {
-  font-size: 13px;
-  line-height: 20px;
-  font-weight: 600;
-  color: var(--dsw-alias-label-primary, #1a1a1a);
-}
-
-.overlayClose {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 24px;
-  height: 24px;
-  padding: 0;
-  border: none;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--dsw-alias-label-secondary, #555);
-  font-size: 16px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.overlayClose:hover {
-  background: var(--dsw-alias-interactive-bg-hover, rgba(0, 0, 0, 0.05));
-}
-
-/* The manager body host inside the panel: fills the remaining height and
-   scrolls internally (the body's `.body` owns the scroll). */
-.overlayBody {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
 }

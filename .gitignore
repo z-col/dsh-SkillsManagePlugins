@@ -1,7 +1,11 @@
 node_modules/
-lib/
 *.tsbuildinfo
 .DS_Store
+
+# NOTE: lib/ is NOT ignored — the built host/client bundles are committed so a
+# GitHub install (dsh plugin add github:z-col/dsh-SkillsManagePlugins) needs no
+# build script at all (pnpm >= 10 blocks git-dependency build scripts by default).
+# Rebuild before committing src changes: pnpm build
 
 # 不随仓库发布：agent / docs 工作区
 .dev-lead/

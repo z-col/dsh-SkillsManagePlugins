@@ -3,7 +3,7 @@
  * node) plus one browser client bundle (lib/client.js, CJS closure factory).
  *
  * The client bundle replicates the official DSH client-bundle preset
- * (packages/client/tsdown.client.ts, same shape as dsh-better-sidebar):
+ * (packages/client/tsdown.client.ts):
  * - externals resolve through the loader module table at runtime (the
  *   PLATFORM_MODULES seed list from packages/client/web/src/platform.ts,
  *   plus the runtime/client exemption),

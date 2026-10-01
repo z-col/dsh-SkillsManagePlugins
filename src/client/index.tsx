@@ -1,32 +1,42 @@
 /**
- * Client half of dsh-skills-manager: two mutually exclusive entry points.
+ * Client half of dsh-skills-manager: one entry — a conversation view tab.
  *
- * 1. Integrated — when dsh-better-sidebar is installed (now or later): the
- *    Skills tab in its + menu. `ctx.inject(['betterSidebar'])` is a cordis
- *    fiber that stays pending while the service is absent and fires when it
- *    is provided (the runtime re-evaluates pending injects on service
- *    provide/unload), so installing the sidebar AFTER this plugin just works.
+ * The plugin contributes a third view to the session's view tab strip (对话 =
+ * ui-chat's `chat`, 轨迹 = ui-trajectory's `trajectory`) by registering into
+ * ui-conversation's `conversation.view` list seat; selecting the tab renders
+ * the manager in the centre column, exactly like the shipped 轨迹 tab.
  *
- * 2. Standalone — while dsh-better-sidebar is absent: a conversation-header
- *    utility button opens a floating panel (`shell.overlay`) hosting the same
- *    manager body. The surfaces are torn down the moment the sidebar appears
- *    (the tab takes over) and re-registered if it is later removed.
+ * The seat is SESSION-scoped: the registration's `inject` factory receives the
+ * SessionId of the session the tab belongs to and is what the manager's request
+ * scope rides, so no global "current session" field is read (DSH 0.2 removed
+ * the one 0.1.x exposed, which is why a panel guessing it rendered 「暂无会话」
+ * on every 0.2 client).
  *
- * All copy rides the DSH locale system; each manager store is one instance
- * per activation.
+ * Registration waits for ui-conversation's declaration through
+ * `ctx.slots.inject`, so activation order never matters (ui-conversation may
+ * activate before or after this plugin) and fiber disposal removes the tab with
+ * no dangling entry.
+ *
+ * All copy rides the DSH locale system; the manager store is one instance per
+ * activation (view state survives tab switches).
  */
 import type { Context } from '../context-types.ts'
 import { createSkillsPanelStore } from './state.ts'
-import { skillsTabDescriptor } from './SkillsTab.tsx'
-import { registerStandalone } from './StandaloneEntry.tsx'
-import { LOCALE_NS, attachLocale, zh, en } from './locales.ts'
+import { SkillsView } from './SkillsView.tsx'
+import { LOCALE_NS, attachLocale, zh, en, t } from './locales.ts'
 
 /** Services required before mounting (provided by the client runtime). */
-export const inject = ['locale']
+export const inject = ['slots', 'locale', 'sessions']
+
+/** The view tab id: unique among the session's views (chat, trajectory, …). */
+export const SKILLS_VIEW_ID = 'skills'
+
+/** Row order in the view tab strip: chat 0, trajectory 10, skills 20. */
+const SKILLS_VIEW_ORDER = 20
 
 /**
  * Client plugin body.
- * @param ctx - the client cordis context (locale).
+ * @param ctx - the client cordis context (slots / locale / sessions).
  */
 export function apply(ctx: Context): void {
   attachLocale(ctx.locale)
@@ -36,44 +46,24 @@ export function apply(ctx: Context): void {
     return () => { offZh(); offEn() }
   }, 'dsh-skills-manager: dictionaries')
 
-  // ── Integrated entry: the dsh-better-sidebar tab. The fiber fires whenever
-  // the sidebar service is provided (including install-after-us) and unloads
-  // when it is removed; its absence is silent.
-  ctx.inject(['betterSidebar'], (sidebarCtx) => {
-    const tabStore = createSkillsPanelStore()
-    const disposer = sidebarCtx.betterSidebar?.registerTab(skillsTabDescriptor(tabStore))
-    return () => { disposer?.() }
-  })
+  const store = createSkillsPanelStore()
 
-  // ── Standalone entry: active while the sidebar is ABSENT. The slots and
-  // sessions services always exist in the web app; we gate on the sidebar's
-  // presence and watch the `internal/service` event so the standalone
-  // surfaces appear/disappear exactly when the sidebar disappears/appears
-  // (the two entries are never mounted together).
-  ctx.inject(['slots', 'sessions'], (standaloneCtx) => {
-    if (standaloneCtx.get('betterSidebar') !== undefined) return
-    let disposed = false
-    let disposeStandalone: (() => void) | undefined = registerStandalone(standaloneCtx)
-    const off = standaloneCtx.on('internal/service', (...args) => {
-      if (disposed) return
-      const name = args[0] as string | undefined
-      if (name !== 'betterSidebar') return
-      const value = args[1]
-      if (value !== undefined) {
-        // The sidebar arrived (installed after us): the tab fiber above has
-        // already mounted — unmount the standalone entry.
-        disposeStandalone?.()
-        disposeStandalone = undefined
-      } else if (disposeStandalone === undefined) {
-        // The sidebar was removed: the tab fiber unloaded — bring the
-        // standalone entry back.
-        disposeStandalone = registerStandalone(standaloneCtx)
-      }
-    })
-    return () => {
-      disposed = true
-      off()
-      disposeStandalone?.()
-    }
-  })
+  // The view tab. `conversation.view` is declared by ui-conversation's
+  // `conversation.session` entry; inject waits for that declaration and
+  // unloads with this fiber. The label rides our own locale-aware `t()`, and
+  // ui-conversation re-reads tab labels on every locale switch, so the
+  // function form stays current.
+  ctx.slots.inject('conversation.view', () => ctx.slots.register(
+    {
+      name: 'conversation.view',
+      id: SKILLS_VIEW_ID,
+      order: SKILLS_VIEW_ORDER,
+      label: () => t('panelTitle'),
+      // Session-scoped seat: the factory's first argument is the SessionId this
+      // instance renders for; hand it (with the plugin's own context + store)
+      // to the view as its props.
+      inject: (sessionId: string) => ({ ctx, store, sessionId }),
+    },
+    SkillsView,
+  ))
 }

@@ -1,6 +1,6 @@
 {
   "name": "dsh-skills-manager",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "DSH web plugin: visualize and manage your skills — a canonical Skill library (~/.dsh/skill-library) plus user-level (~/.dsh/skills) and project-level (<root>/.dsh/skills) assignment copies, with full CRUD and multi-project assignment.",
   "type": "module",
   "license": "MIT",
@@ -26,6 +26,7 @@
   "files": [
     "lib/index.js",
     "lib/client.js",
+    "lib/client.js.map",
     "lib/types/**/*.d.ts",
     "cordis.patch.yml",
     "README.md"
@@ -39,8 +40,9 @@
     },
     "client": {
       "inject": [
-        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-api-session-controller",
         "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-conversation",
         "@deepseek-ai/dsh-client-ui-slots"
       ],
       "platform": "web"
@@ -50,30 +52,31 @@
     "build": "rm -rf lib && tsc -p tsconfig.build.json && tsdown",
     "typecheck": "tsc --noEmit",
     "watch": "tsdown --watch",
-    "test": "vitest run"
+    "test": "vitest run",
+    "prepublishOnly": "pnpm build"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-skill-filesystem": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-atomic-write": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-client-locale": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-primitives": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-client-ui-slots": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-home-paths": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-host-webserver": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-session": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-skill": ">=0.1.7-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-skill-filesystem": ">=0.1.7-rc.2 <0.3.0",
     "cordis": "^4.0.0-rc.7",
-    "dsh-better-sidebar": "^0.10.3",
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
   "peerDependenciesMeta": {
-    "cordis": { "optional": true },
-    "react-dom": { "optional": true },
-    "dsh-better-sidebar": { "optional": true }
+    "cordis": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
   },
   "dependencies": {
     "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
@@ -82,25 +85,27 @@
     "yaml": "^2.4.2"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1",
+    "@deepseek-ai/cordis": "^4.0.4",
     "@deepseek-ai/dsh-agent": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-locale": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-client-runtime": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-client-ui-primitives": "^0.1.7-rc.2",
     "@deepseek-ai/dsh-client-ui-slots": "^0.1.0-rc.6",
+    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-host-webserver": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-session": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-skill": "^0.1.0-rc.6",
     "@deepseek-ai/dsh-skill-filesystem": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-atomic-write": "^0.1.0-rc.6",
-    "@deepseek-ai/dsh-home-paths": "^0.1.0-rc.6",
     "@types/node": "^24.0.0",
     "@types/react": "~18.3.1",
+    "@types/semver": "^7.5.8",
     "@types/react-dom": "~18.3.1",
     "cordis": "^4.0.0-rc.7",
     "lightningcss": "^1.32.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
+    "semver": "^7.6.0",
     "tsdown": "^0.22.2",
     "typescript": "^5.6.0",
     "vitest": "^4.1.8"

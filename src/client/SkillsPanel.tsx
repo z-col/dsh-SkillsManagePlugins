@@ -9,12 +9,12 @@
  * copy, rename/delete operate everywhere (canonical + all copies), and sync
  * pushes the canonical to every copy.
  *
- * The views are mounted by the dsh-better-sidebar tab ({@link SkillsTab});
- * the {@link SkillsManagerBody} receives the request scope explicitly so the
- * shell supplies the current session's facts.
+ * The views are mounted by the conversation-view tab ({@link SkillsView}); the
+ * {@link SkillsManagerBody} receives the request scope explicitly so the view
+ * supplies the session its tab belongs to.
  */
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { IconFolderOpen16, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
+import { IconFolderOpenRegular, Modal } from '@deepseek-ai/dsh-client-ui-primitives'
 import type { SkillsPanelStore, SkillsScope } from './state.ts'
 import type { SkillsAssignTarget, SkillsEntry, SkillsFile, SkillsLevelRoot, SkillsLibraryData } from './api.ts'
 import { api, SkillsApiError } from './api.ts'
@@ -30,7 +30,7 @@ function messageOf(error: unknown): string {
 /**
  * The shared manager body: root tabs (用户级 / 项目级 / Skill 库), the action
  * row, and the list/detail/create views. `scope` is the request scope the
- * body's API calls ride (session id + cwd), supplied by the mounting shell.
+ * body's API calls ride (session id + cwd), supplied by the mounting page.
  */
 export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: SkillsScope }) {
   const { store, scope } = props
@@ -38,7 +38,7 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
   const [, force] = useState(0)
   useEffect(() => store.subscribe(() => force(v => v + 1)), [store])
 
-  // The sidebar shell rebuilds the `scope` prop object on every shell
+  // The mounting page rebuilds the `scope` prop object on every page
   // re-render (session feed / store / locale changes). Depending on the
   // OBJECT would re-fire api.list and flash the loading state on every such
   // re-render — the visible "flicker". Depend on the primitive fields so an
@@ -154,7 +154,7 @@ export function SkillsManagerBody(props: { store: SkillsPanelStore; scope: Skill
             disabled={openingFolder}
             onClick={() => { void openCurrentFolder() }}
           >
-            <IconFolderOpen16 />
+            <IconFolderOpenRegular size={16} />
           </button>
         </div>
       </div>
@@ -510,7 +510,12 @@ function LibraryView(props: {
               className={css.skillCardMain}
               onClick={() => { closeMenu(); onOpen(entry.name) }}
             >
-              <span className={css.skillName}>{entry.name}</span>
+              <span className={css.skillNameRow}>
+                <span className={css.skillName}>{entry.name}</span>
+                {entry.assignments.includes('user') && (
+                  <span className={css.badgeGlobal}>{t('badgeGlobal')}</span>
+                )}
+              </span>
               <span className={css.skillDesc}>{entry.description}</span>
             </button>
             <button
@@ -603,7 +608,7 @@ function DetailView(props: {
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   // Same flicker guard as the body: depend on the scope's primitive fields,
-  // not the object the sidebar shell rebuilds on every re-render.
+  // not the object the mounting page rebuilds on every re-render.
   const sessionId = scope.sessionId
   const cwd = scope.cwd
 

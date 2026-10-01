@@ -51,15 +51,21 @@ export interface SkillsLoader {
   entries(): Iterable<SkillsLoaderEntry>
 }
 
-/** The client sessions list feed face (session id + cwd for the API scope). */
+/** One session row as the client feed publishes it (only the facts the panel reads). */
 export interface SkillsClientSessionSummary {
   id: string
   cwd?: string
   displayTitle?: string
 }
 
+/**
+ * The client sessions list feed face. The session the manager manages is NOT
+ * derived from this feed — the session-scoped `conversation.view` seat hands the
+ * view its own SessionId, which is also why the panel survives DSH 0.2 dropping
+ * the feed's old `current` selection field. Only the row's `cwd` (the API's
+ * fallback scope while the host session hydrates) is read here.
+ */
 export interface SkillsClientSessionList {
-  current: string | undefined
   byId: Record<string, SkillsClientSessionSummary>
 }
 
@@ -81,8 +87,11 @@ export interface SkillsSlotRegisterOptions {
   priority?: number
   locale?: string
   registrant?: string
-  /** Business-face factory; args depend on the slot scope. */
-  inject?: (...args: unknown[]) => Record<string, unknown>
+  /**
+   * Business-face factory; args depend on the slot scope. The session-scoped
+   * form (`conversation.view`) receives that instance's SessionId first.
+   */
+  inject?: (sessionId: string) => Record<string, unknown>
   children?: Record<string, unknown>
 }
 
@@ -106,44 +115,6 @@ export interface SkillsLocaleService {
   register(namespace: string, language: string, dictionary: Record<string, string>): () => void
 }
 
-/**
- * Structural mirror of dsh-better-sidebar's TabDescriptor + registerTab face
- * (the plugin is an optional peer — declared structurally so this package
- * never imports its runtime values; the purity gate would reject them).
- */
-export interface SkillsSidebarTabDescriptor {
-  /** Unique id; also the SidebarTab.type value. */
-  id: string
-  title: string | (() => string)
-  icon?: unknown
-  /** + menu sort order (ascending); default 100. */
-  order?: number
-  /** Single-instance sugar: opening focuses an existing tab of the same type. */
-  single?: boolean
-  /** The tab content renderer. */
-  component: (props: SkillsSidebarTabProps) => unknown
-}
-
-/** The tab props dsh-better-sidebar passes to every registered tab. */
-export interface SkillsSidebarTabProps {
-  /** The client cordis context. */
-  ctx: Context
-  /** The plugin's sidebar store (structural, unused by this tab). */
-  store: unknown
-  /** The current session scope: conversation id plus its cwd when known. */
-  scope: { sessionId: string; cwd?: string }
-  /** The open tab record. */
-  tab: { id: string; type: string; title: string; path?: string }
-  /** Whether this tab is the active one AND the panel is open. */
-  visible: boolean
-}
-
-/** The dsh-better-sidebar client service face (`ctx.betterSidebar`). */
-export interface SkillsBetterSidebarService {
-  /** Register one tab descriptor; returns the disposer. */
-  registerTab(descriptor: SkillsSidebarTabDescriptor): () => void
-}
-
 declare module 'cordis' {
   interface Context {
     /** The webserver route registry (host half). */
@@ -156,8 +127,6 @@ declare module 'cordis' {
     slots: SkillsSlotsService
     /** The client locale service (client half). */
     locale: SkillsLocaleService
-    /** The dsh-better-sidebar client registry (client half, optional peer). */
-    betterSidebar?: SkillsBetterSidebarService
     /**
      * Register a lifecycle callback (DSH-vendored cordis): runs at plugin
      * activation; its returned cleanup runs at disposal.

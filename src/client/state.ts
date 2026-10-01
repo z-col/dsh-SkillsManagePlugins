@@ -5,16 +5,17 @@
  * slot registrations; no module-level singleton).
  *
  * The store holds only browsing state: which root is shown, which view, and
- * a revision counter for list reloads. The request scope (session id + cwd)
- * is NOT stored — the mounting shell (the better-sidebar tab) supplies it as
- * a prop, so a session switch never leaves stale scope in the store.
+ * a revision counter for list reloads. The request scope (session id + cwd) is
+ * NOT stored — the conversation-view tab ({@link SkillsView}) receives its
+ * SessionId from the session-scoped slot injection, so a session switch never
+ * leaves stale scope in the store.
  */
 
 /** Which surface the panel is showing: a level root or the skill library. */
 export type SkillsRoot = 'user' | 'project' | 'library'
 
-/** Panel view mode. */
-export type SkillsView = 'list' | 'detail'
+/** Panel view mode (the skill list vs one skill's detail). */
+export type SkillsViewMode = 'list' | 'detail'
 
 /** One request scope (session id + optional cwd) the API calls ride. */
 export interface SkillsScope {
@@ -27,7 +28,7 @@ export interface SkillsPanelState {
   /** The root currently browsed. */
   root: SkillsRoot
   /** Current view mode. */
-  view: SkillsView
+  view: SkillsViewMode
   /** The skill name selected in detail view (empty in list/create). */
   selectedName: string
 }
@@ -79,55 +80,5 @@ export function createSkillsPanelStore(): SkillsPanelStore {
       return () => { listeners.delete(fn) }
     },
     actions,
-  }
-}
-
-/**
- * The standalone overlay store: whether the floating skills panel (used only
- * while dsh-better-sidebar is absent) is open. One instance per activation;
- * the header utility button and the overlay panel share it.
- */
-export interface SkillsStandaloneState {
-  open: boolean
-}
-
-/** The standalone store's write actions. */
-export interface SkillsStandaloneActions {
-  toggle(): void
-  close(): void
-}
-
-/** The standalone store product. */
-export interface SkillsStandaloneStore {
-  getSnapshot(): SkillsStandaloneState
-  subscribe(fn: () => void): () => void
-  actions: SkillsStandaloneActions
-}
-
-/** Factory: one standalone store instance per plugin activation. */
-export function createSkillsStandaloneStore(): SkillsStandaloneStore {
-  let state: SkillsStandaloneState = { open: false }
-  const listeners = new Set<() => void>()
-  const emit = (): void => {
-    for (const listener of listeners) listener()
-  }
-  const set = (patch: Partial<SkillsStandaloneState>): void => {
-    state = { ...state, ...patch }
-    emit()
-  }
-  return {
-    getSnapshot: () => state,
-    subscribe(fn) {
-      listeners.add(fn)
-      return () => { listeners.delete(fn) }
-    },
-    actions: {
-      toggle() {
-        set({ open: !state.open })
-      },
-      close() {
-        set({ open: false })
-      },
-    },
   }
 }
